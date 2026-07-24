@@ -40,13 +40,24 @@ def _ensure_schema_columns():
     is_sqlite = 'sqlite' in str(engine.url)
     
     with engine.connect() as conn:
-        def column_exists(table_name, column_name):
+        def table_exists(table_name):
             if is_sqlite:
-                # SQLite: use PRAGMA via raw connection
+                result = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")).fetchall()
+                return len(result) > 0
+            else:
+                result = conn.execute(text(f"""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' AND table_name = '{table_name}'
+                """)).fetchall()
+                return len(result) > 0
+
+        def column_exists(table_name, column_name):
+            if not table_exists(table_name):
+                return False
+            if is_sqlite:
                 result = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
                 return any(row[1] == column_name for row in result)
             else:
-                # PostgreSQL: use information_schema
                 result = conn.execute(text(f"""
                     SELECT column_name FROM information_schema.columns 
                     WHERE table_name = '{table_name}' AND column_name = '{column_name}'
@@ -82,10 +93,9 @@ def _ensure_schema_columns():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    _ensure_schema_columns()
-    # Ensure all tables exist
+    # Startup — create all tables first, then patch any missing columns
     Base.metadata.create_all(bind=engine)
+    _ensure_schema_columns()
     # Seed demo data and ensure there are sample sales for analytics
     db = SessionLocal()
     try:
