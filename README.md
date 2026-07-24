@@ -208,3 +208,4 @@ then Render is using a manually created service instead of the Blueprint-managed
 - The frontend uses a single-page app rewrite to `/index.html`, so deep links like `/products` and `/orders` resolve correctly on Render.
 
 
+
