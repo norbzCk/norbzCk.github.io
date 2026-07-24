@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "build": "vite build",
+    "preview": "vite preview --port $PORT --host"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.5",
