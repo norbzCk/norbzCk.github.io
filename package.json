@@ -1,0 +1,10 @@
+{
+  "name": "sales-project",
+  "private": true,
+  "workspaces": [
+    "frontend-react"
+  ],
+  "scripts": {
+    "build": "cd frontend-react && npm run build"
+  }
+}
