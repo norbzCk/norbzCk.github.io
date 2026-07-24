@@ -24,7 +24,7 @@ import { StatCards, PageIntro } from "../components/ui/PageSections";
 import { apiRequest } from "../lib/http";
 import type { Order } from "../types/domain";
 
-const lifecycleSteps = ["Pending", "Confirmed", "Processing", "Dispatched", "In Transit", "Delivered"] as const;
+const lifecycleSteps = ["Pending", "Confirmed", "Processing", "Dispatched", "In Transit", "Delivery Failed", "Delivered"] as const;
 
 function formatMoney(value?: number) {
   return `TZS ${Number(value || 0).toLocaleString()}`;
@@ -32,6 +32,7 @@ function formatMoney(value?: number) {
 
 function normalizeStatus(value?: string | null) {
   const status = String(value || "").trim().toLowerCase();
+  if (status.includes("delivery failed")) return "Delivery Failed";
   if (status === "confirmed") return "Confirmed";
   if (status === "processing" || status === "packed" || status === "ready for shipping") return "Processing";
   if (status === "dispatched" || status === "shipped") return "Dispatched";
@@ -43,6 +44,7 @@ function normalizeStatus(value?: string | null) {
 
 function statusColor(status: string) {
   if (status === "Delivered") return "text-emerald-500 bg-emerald-500/10";
+  if (status === "Delivery Failed") return "text-danger bg-danger/10";
   if (status === "Cancelled") return "text-danger bg-danger/10";
   if (status === "Pending") return "text-amber-500 bg-amber-500/10";
   return "text-brand bg-brand/10";

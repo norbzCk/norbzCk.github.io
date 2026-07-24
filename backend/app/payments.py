@@ -1,13 +1,13 @@
 import json
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from backend.app.auth import get_current_user, require_roles
 from backend.app.notification_service import create_notification, resolve_subject
 from backend.app.schemas import PaymentRequest, PaymentResponse, PaymentMethod
 from backend.database import get_db
-from backend.models import BusinessUser, PaymentTransaction, Sale, User
+from backend.models import BusinessUser, Order, PaymentAttempt, PaymentTransaction, Sale, User
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
@@ -128,6 +128,79 @@ def _notify_payment_parties(
             )
 
 
+def _linked_order_model(db: Session, sale: Sale) -> Order | None:
+    if sale.order_id:
+        order = db.query(Order).filter(Order.id == sale.order_id).first()
+        if order:
+            return order
+    return db.query(Order).filter(Order.legacy_sale_id == sale.id).first()
+
+
+def _payable_order_total(db: Session, sale: Sale) -> float:
+    linked_order = _linked_order_model(db, sale)
+    if linked_order:
+        return round(float(linked_order.total_amount or 0), 2)
+    return round(float((sale.unit_price or 0) * (sale.quantity or 0)), 2)
+
+
+def _reused_payment_transaction(
+    db: Session,
+    *,
+    sale: Sale,
+    buyer_id: int,
+    payment_method: str,
+    amount: float,
+    idempotency_key: str | None,
+) -> PaymentTransaction | None:
+    normalized_key = (idempotency_key or "").strip() or None
+    if normalized_key:
+        attempt = (
+            db.query(PaymentAttempt)
+            .filter(
+                PaymentAttempt.sale_id == sale.id,
+                PaymentAttempt.buyer_id == buyer_id,
+                PaymentAttempt.idempotency_key == normalized_key,
+            )
+            .order_by(PaymentAttempt.created_at.desc(), PaymentAttempt.id.desc())
+            .first()
+        )
+        if attempt:
+            if attempt.provider_reference:
+                txn = (
+                    db.query(PaymentTransaction)
+                    .filter(PaymentTransaction.transaction_id == attempt.provider_reference)
+                    .first()
+                )
+                if txn:
+                    return txn
+            txn = (
+                db.query(PaymentTransaction)
+                .filter(
+                    PaymentTransaction.order_id == sale.id,
+                    PaymentTransaction.payer_id == buyer_id,
+                    PaymentTransaction.payment_method == payment_method,
+                    PaymentTransaction.amount == amount,
+                )
+                .order_by(PaymentTransaction.created_at.desc(), PaymentTransaction.id.desc())
+                .first()
+            )
+            if txn:
+                return txn
+
+    return (
+        db.query(PaymentTransaction)
+        .filter(
+            PaymentTransaction.order_id == sale.id,
+            PaymentTransaction.payer_id == buyer_id,
+            PaymentTransaction.payment_method == payment_method,
+            PaymentTransaction.amount == amount,
+            PaymentTransaction.status.in_(["pending", "pending_delivery", "completed"]),
+        )
+        .order_by(PaymentTransaction.created_at.desc(), PaymentTransaction.id.desc())
+        .first()
+    )
+
+
 @router.get("/methods")
 def get_payment_methods(
     db: Session = Depends(get_db),
@@ -149,6 +222,7 @@ def initiate_payment(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(require_roles("user")),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ):
     order = db.query(Sale).filter(Sale.id == payload.order_id).first()
     if not order:
@@ -160,6 +234,21 @@ def initiate_payment(
     if order_status in {"Cancelled", "Received"}:
         raise HTTPException(status_code=400, detail="Cannot pay for an order that is already finalized")
 
+    expected_total = _payable_order_total(db, order)
+    if abs(expected_total - payload.amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Amount does not match order total")
+
+    reused_txn = _reused_payment_transaction(
+        db,
+        sale=order,
+        buyer_id=current.id,
+        payment_method=payload.payment_method,
+        amount=payload.amount,
+        idempotency_key=idempotency_key,
+    )
+    if reused_txn:
+        return _serialize_transaction(reused_txn)
+
     existing_payment = db.query(PaymentTransaction).filter(
         PaymentTransaction.order_id == order.id,
         PaymentTransaction.status == "completed"
@@ -167,9 +256,6 @@ def initiate_payment(
     if existing_payment:
         raise HTTPException(status_code=400, detail="Order has already been paid")
 
-    if abs(order.unit_price * order.quantity - payload.amount) > 0.01:
-        raise HTTPException(status_code=400, detail="Amount does not match order total")
-    
     transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
     instructions = _payment_instructions(payload.payment_method)
     payer_type, payer_id, _, _ = resolve_subject(current)
@@ -190,6 +276,28 @@ def initiate_payment(
         metadata_json=json.dumps({"notes": payload.notes} if payload.notes else {}),
     )
     db.add(txn)
+    linked_order = _linked_order_model(db, order)
+    db.add(
+        PaymentAttempt(
+            order_id=linked_order.id if linked_order else None,
+            sale_id=order.id,
+            buyer_id=current.id,
+            idempotency_key=(idempotency_key or "").strip() or None,
+            amount=payload.amount,
+            payment_method=payload.payment_method,
+            provider=payload.payment_method,
+            status=status,
+            provider_reference=transaction_id,
+            message=f"Payment initiated via {payload.payment_method}",
+        )
+    )
+
+    # Auto-progress order status for immediate payment methods (e.g., cash on delivery)
+    if status != "pending":
+        current_status = (order.status or "").strip().title()
+        if current_status == "Pending":
+            order.status = "Confirmed"
+            db.add(order)
 
     _notify_payment_parties(
         db,
@@ -216,6 +324,7 @@ def stk_push_payment(
     provider: str = "mpesa",
     db: Session = Depends(get_db),
     current: User = Depends(require_roles("user")),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ):
     if provider not in ["mpesa", "airtel_money", "tigopesa"]:
         raise HTTPException(status_code=400, detail="Invalid mobile money provider")
@@ -230,6 +339,21 @@ def stk_push_payment(
     if order_status in {"Cancelled", "Received"}:
         raise HTTPException(status_code=400, detail="Cannot pay for an order that is already finalized")
 
+    expected_total = _payable_order_total(db, order)
+    if abs(expected_total - amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Amount does not match order total")
+
+    reused_txn = _reused_payment_transaction(
+        db,
+        sale=order,
+        buyer_id=current.id,
+        payment_method=provider,
+        amount=amount,
+        idempotency_key=idempotency_key,
+    )
+    if reused_txn:
+        return _serialize_transaction(reused_txn)
+
     existing_payment = db.query(PaymentTransaction).filter(
         PaymentTransaction.order_id == order.id,
         PaymentTransaction.status == "completed"
@@ -237,9 +361,6 @@ def stk_push_payment(
     if existing_payment:
         raise HTTPException(status_code=400, detail="Order has already been paid")
 
-    if abs(order.unit_price * order.quantity - amount) > 0.01:
-        raise HTTPException(status_code=400, detail="Amount does not match order total")
-    
     transaction_id = f"STK-{uuid.uuid4().hex[:10].upper()}"
     payer_type, payer_id, _, _ = resolve_subject(current)
     txn = PaymentTransaction(
@@ -258,6 +379,21 @@ def stk_push_payment(
         metadata_json=json.dumps({"channel": "stk_push"}),
     )
     db.add(txn)
+    linked_order = _linked_order_model(db, order)
+    db.add(
+        PaymentAttempt(
+            order_id=linked_order.id if linked_order else None,
+            sale_id=order.id,
+            buyer_id=current.id,
+            idempotency_key=(idempotency_key or "").strip() or None,
+            amount=amount,
+            payment_method=provider,
+            provider=provider,
+            status="completed",
+            provider_reference=transaction_id,
+            message=f"STK Push completed successfully for {provider}.",
+        )
+    )
     # Automatically progress order status after payment
     current_status = (order.status or "").strip().title()
     if current_status == "Pending":
@@ -319,6 +455,20 @@ def confirm_transaction(
     txn.message = (payload or {}).get("message") or ("Payment confirmed successfully" if status == "completed" else "Payment failed")
     txn.confirmed_at = datetime.utcnow() if status == "completed" else None
     db.add(txn)
+    linked_order = _linked_order_model(db, order)
+    db.add(
+        PaymentAttempt(
+            order_id=linked_order.id if linked_order else None,
+            sale_id=order.id,
+            buyer_id=int(order.created_by) if order.created_by is not None else None,
+            amount=float(txn.amount or 0),
+            payment_method=txn.payment_method,
+            provider=txn.provider,
+            status=status,
+            provider_reference=txn.transaction_id,
+            message=txn.message,
+        )
+    )
 
     buyer = db.query(User).filter(User.id == int(order.created_by)).first() if order.created_by is not None else None
     if status == "completed":

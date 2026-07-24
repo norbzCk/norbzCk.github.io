@@ -1,14 +1,17 @@
 from pathlib import Path
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from backend.app.auth import hash_password, require_roles, router as auth_router
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from backend.app.auth import hash_password, require_roles, router as auth_router, limiter
 from backend.app.ai_assistant import router as ai_assistant_router
 from backend.app.notification_service import create_notification, resolve_subject
-from backend.database import engine, get_db
+from backend.database import engine, get_db, SessionLocal
 from backend.app.products import router as products_router
 from backend.app.customers import router as customers_router
 from backend.app.sales import router as sales_router
@@ -19,604 +22,124 @@ from backend.app.business import router as business_router
 from backend.app.logistics import router as logistics_router
 from backend.app.notifications import router as notifications_router
 from backend.app.disputes import router as disputes_router
-from backend.models import Base, User, BusinessMetrics, BusinessUser, LogisticsMetrics, LogisticsUser, Product, Provider
+from backend.models import Base, User, BusinessMetrics, BusinessUser, LogisticsMetrics, LogisticsUser, Product, Provider, Sale
+from datetime import date
 from fastapi.staticfiles import StaticFiles
-from backend.app.marketplace_intelligence import build_superadmin_overview
+from backend.app.marketplace_intelligence import build_marketplace_trends, build_superadmin_overview
 
 
 from backend.app.dashboard import dashboard_analytics, dashboard_stats, get_recent_sales, revenue_by_product, revenue_over_time
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+frontend_dist_dir = Path(__file__).parent.parent.parent / "frontend-react" / "dist"
 
-frontend_dist_dir = Path(__file__).resolve().parents[2] / "frontend-react" / "dist"
-frontend_assets_dir = frontend_dist_dir / "assets"
+def _ensure_schema_columns():
+    from sqlalchemy import text, inspect
+    from backend.database import engine
+    
+    is_sqlite = 'sqlite' in str(engine.url)
+    
+    with engine.connect() as conn:
+        def column_exists(table_name, column_name):
+            if is_sqlite:
+                # SQLite: use PRAGMA via raw connection
+                result = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+                return any(row[1] == column_name for row in result)
+            else:
+                # PostgreSQL: use information_schema
+                result = conn.execute(text(f"""
+                    SELECT column_name FROM information_schema.columns 
+                    WHERE table_name = '{table_name}' AND column_name = '{column_name}'
+                """)).fetchall()
+                return len(result) > 0
+        
+        def add_column_if_not_exists(table_name, column_name, column_def):
+            if not column_exists(table_name, column_name):
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_def}"))
+                conn.commit()
+        
+        # Lightweight schema patching for existing databases (no Alembic yet).
+        add_column_if_not_exists("sales", "created_by", "created_by INTEGER")
+
+        # Product catalog: allow storing picture URL per item.
+        add_column_if_not_exists("products", "image_url", "image_url VARCHAR")
+        add_column_if_not_exists("products", "rating_avg", "rating_avg DOUBLE PRECISION DEFAULT 0")
+        add_column_if_not_exists("products", "rating_count", "rating_count INTEGER DEFAULT 0")
+        add_column_if_not_exists("products", "provider_id", "provider_id INTEGER")
+
+        add_column_if_not_exists("sales", "product_id", "product_id INTEGER")
+        add_column_if_not_exists("sales", "status", "status VARCHAR DEFAULT 'Received'")
+        add_column_if_not_exists("sales", "rating", "rating INTEGER")
+        add_column_if_not_exists("sales", "rated_at", "rated_at TIMESTAMPTZ")
+
+        add_column_if_not_exists("sales", "provider_id", "provider_id INTEGER")
+        add_column_if_not_exists("sales", "provider_name", "provider_name VARCHAR")
+        add_column_if_not_exists("sales", "delivery_address", "delivery_address VARCHAR")
+        add_column_if_not_exists("sales", "delivery_phone", "delivery_phone VARCHAR")
+        add_column_if_not_exists("sales", "delivery_notes", "delivery_notes VARCHAR")
+        add_column_if_not_exists("sales", "delivery_method", "delivery_method VARCHAR DEFAULT 'Standard'")
 
 
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
-
-def _cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS")
-    if not raw:
-        return ["*"]
-    return [item.strip() for item in raw.split(",") if item.strip()]    
-
-
-@app.on_event("startup")
-def ensure_schema_columns():
-
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    _ensure_schema_columns()
+    # Ensure all tables exist
     Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS image_url VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS rating_avg DOUBLE PRECISION DEFAULT 0
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS rating_count INTEGER DEFAULT 0
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS provider_id INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS seller_id INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS products
-                ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS users
-                ADD COLUMN IF NOT EXISTS phone VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS users
-                ADD COLUMN IF NOT EXISTS address VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS users
-                ADD COLUMN IF NOT EXISTS profile_photo VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS product_id INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS pickup_lat DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS pickup_lng DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS destination_lat DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS destination_lng DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS current_lat DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS current_lng DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS estimated_distance_km DOUBLE PRECISION
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS last_location_name VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS tracking_updated_at TIMESTAMPTZ
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS failure_reason VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS proof_type VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS proof_note TEXT
-                """
-            )
-        )
-        conn.execute(
-             text(
-                 """
-                 ALTER TABLE IF EXISTS delivery_orders
-                 ADD COLUMN IF NOT EXISTS cod_amount_received DOUBLE PRECISION
-                 """
-             )
-         )
-        conn.execute(
-             text(
-                 """
-                 ALTER TABLE IF EXISTS delivery_orders
-                 ADD COLUMN IF NOT EXISTS rating INTEGER
-                 """
-             )
-         )
-        conn.execute(
-             text(
-                 """
-                 ALTER TABLE IF EXISTS delivery_orders
-                 ADD COLUMN IF NOT EXISTS rated_at TIMESTAMPTZ
-                 """
-             )
-         )
-        conn.execute(
-             text(
-                 """
-                 ALTER TABLE IF EXISTS delivery_orders
-                 ADD COLUMN IF NOT EXISTS rating_comment TEXT
-                 """
-             )
-         )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'Received'
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS rating INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS rated_at TIMESTAMPTZ
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS provider_id INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS provider_name VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS seller_id INTEGER
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS status_reason VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS delivery_address VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS delivery_phone VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS delivery_notes VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS sales
-                ADD COLUMN IF NOT EXISTS delivery_method VARCHAR DEFAULT 'Standard'
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS business_users (
-                    id SERIAL PRIMARY KEY,
-                    business_name VARCHAR NOT NULL,
-                    owner_name VARCHAR NOT NULL,
-                    phone VARCHAR UNIQUE NOT NULL,
-                    email VARCHAR,
-                    password_hash VARCHAR NOT NULL,
-                    business_type VARCHAR DEFAULT 'individual',
-                    category VARCHAR,
-                    description VARCHAR,
-                    region VARCHAR DEFAULT 'Dar es Salaam',
-                    area VARCHAR,
-                    street VARCHAR,
-                    shop_number VARCHAR,
-                    operating_hours VARCHAR,
-                    shop_logo_url VARCHAR,
-                    shop_images VARCHAR,
-                    profile_photo VARCHAR,
-                    website_url VARCHAR,
-                    social_facebook VARCHAR,
-                    social_instagram VARCHAR,
-                    social_whatsapp VARCHAR,
-                    social_x VARCHAR,
-                    verification_status VARCHAR DEFAULT 'unverified',
-                    is_active BOOLEAN DEFAULT TRUE,
-                    role VARCHAR DEFAULT 'seller',
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS auto_confirm BOOLEAN DEFAULT FALSE
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS operating_hours VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS shop_logo_url VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS shop_images VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS website_url VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS social_facebook VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS social_instagram VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS social_whatsapp VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS business_users
-                ADD COLUMN IF NOT EXISTS social_x VARCHAR
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS business_metrics (
-                    id SERIAL PRIMARY KEY,
-                    business_id INTEGER UNIQUE NOT NULL,
-                    rating DOUBLE PRECISION DEFAULT 0,
-                    total_sales INTEGER DEFAULT 0,
-                    reviews_count INTEGER DEFAULT 0,
-                    total_revenue DOUBLE PRECISION DEFAULT 0
-                )
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS logistics_users (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR NOT NULL,
-                    phone VARCHAR UNIQUE NOT NULL,
-                    email VARCHAR,
-                    password_hash VARCHAR NOT NULL,
-                    account_type VARCHAR DEFAULT 'individual',
-                    vehicle_type VARCHAR,
-                    plate_number VARCHAR,
-                    license_number VARCHAR,
-                    base_area VARCHAR,
-                    coverage_areas VARCHAR,
-                    status VARCHAR DEFAULT 'offline',
-                    availability VARCHAR DEFAULT 'available',
-                    profile_photo VARCHAR,
-                    verification_status VARCHAR DEFAULT 'unverified',
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS logistics_metrics (
-                    id SERIAL PRIMARY KEY,
-                    logistics_id INTEGER UNIQUE NOT NULL,
-                    rating DOUBLE PRECISION DEFAULT 0,
-                    total_deliveries INTEGER DEFAULT 0,
-                    success_rate DOUBLE PRECISION DEFAULT 0,
-                    cancel_rate DOUBLE PRECISION DEFAULT 0
-                )
-                """
-            )
-        )
-        
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS delivery_orders (
-                    id SERIAL PRIMARY KEY,
-                    order_id INTEGER,
-                    seller_id INTEGER,
-                    buyer_id INTEGER,
-                    logistics_id INTEGER,
-                    pickup_location VARCHAR,
-                    delivery_location VARCHAR,
-                    pickup_phone VARCHAR,
-                    delivery_phone VARCHAR,
-                    status VARCHAR DEFAULT 'pending',
-                    price DOUBLE PRECISION,
-                    special_instructions VARCHAR,
-                    verification_code VARCHAR,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    picked_at TIMESTAMPTZ,
-                    delivered_at TIMESTAMPTZ
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                ALTER TABLE IF EXISTS delivery_orders
-                ADD COLUMN IF NOT EXISTS special_instructions VARCHAR
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS notifications (
-                    id SERIAL PRIMARY KEY,
-                    recipient_type VARCHAR NOT NULL,
-                    recipient_id INTEGER NOT NULL,
-                    title VARCHAR NOT NULL,
-                    message VARCHAR NOT NULL,
-                    notification_type VARCHAR DEFAULT 'system',
-                    severity VARCHAR DEFAULT 'info',
-                    action_href VARCHAR,
-                    metadata_json VARCHAR,
-                    is_read BOOLEAN DEFAULT FALSE,
-                    email VARCHAR,
-                    email_subject VARCHAR,
-                    email_status VARCHAR DEFAULT 'not_requested',
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    read_at TIMESTAMPTZ
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS payment_transactions (
-                    id SERIAL PRIMARY KEY,
-                    transaction_id VARCHAR UNIQUE NOT NULL,
-                    order_id INTEGER NOT NULL,
-                    payer_type VARCHAR NOT NULL,
-                    payer_id INTEGER NOT NULL,
-                    amount DOUBLE PRECISION NOT NULL,
-                    payment_method VARCHAR NOT NULL,
-                    provider VARCHAR,
-                    phone_number VARCHAR,
-                    status VARCHAR DEFAULT 'pending',
-                    message VARCHAR,
-                    instructions VARCHAR,
-                    metadata_json VARCHAR,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW(),
-                    confirmed_at TIMESTAMPTZ
-                )
-                """
-            )
-        )
-
-    with Session(engine) as db:
+    # Seed demo data and ensure there are sample sales for analytics
+    db = SessionLocal()
+    try:
         seed_marketplace_demo_data(db)
+        if db.query(Sale).count() == 0:
+            demo_products = db.query(Product).filter(Product.seller_id.isnot(None)).limit(5).all()
+            sample_sales = []
+            for product in demo_products:
+                sample_sales.append(
+                    Sale(
+                        date=date.today(),
+                        product=product.name,
+                        category=product.category,
+                        product_id=product.id,
+                        seller_id=product.seller_id,
+                        quantity=2,
+                        unit_price=product.price,
+                        status="Received",
+                        rating=5,
+                    )
+                )
+            db.add_all(sample_sales)
+            db.commit()
+    finally:
+        db.close()
+    yield
+    # Shutdown - add any cleanup here if needed
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+
+def _parse_cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if not origins:
+        origins = ["http://127.0.0.1:5500", "http://localhost:5173"]
+    return origins
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_parse_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Mount static files for uploads
+uploads_dir = Path(__file__).parent.parent / "uploads"
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 
 def seed_marketplace_demo_data(db: Session) -> None:
@@ -685,6 +208,25 @@ def seed_marketplace_demo_data(db: Session) -> None:
         db.add(provider)
         db.flush()
 
+    # Category-based placeholder images
+    CATEGORY_PLACEHOLDERS = {
+        "Groceries": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80",
+        "Electronics": "https://images.unsplash.com/photo-1550009158-9ebf69173e03?auto=format&fit=crop&w=600&q=80",
+        "Household": "https://images.unsplash.com/photo-1493809842364-78817add7ffb?auto=format&fit=crop&w=600&q=80",
+        "Fashion": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=600&q=80",
+        "Accessory": "https://images.unsplash.com/photo-1463171379579-3fdfb86d6285?auto=format&fit=crop&w=600&q=80",
+        "Footwear": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80",
+        "Bags": "https://images.unsplash.com/photo-1590874103328-27cf28d6c78a?auto=format&fit=crop&w=600&q=80",
+        "Shoes": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80",
+        "Office": "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=600&q=80",
+        "Official Clothes": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=600&q=80",
+        "Furniture": "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=600&q=80",
+        "stationery": "https://images.unsplash.com/photo-1533613790285-ccb864783284?auto=format&fit=crop&w=600&q=80",
+        "Electronic": "https://images.unsplash.com/photo-1550009158-9ebf69173e03?auto=format&fit=crop&w=600&q=80",
+        "cloth": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=600&q=80",
+        "women bag": "https://images.unsplash.com/photo-1590874103328-27cf28d6c78a?auto=format&fit=crop&w=600&q=80",
+    }
+    
     demo_products = [
         {
             "name": "Premium Rice 25kg",
@@ -727,23 +269,140 @@ def seed_marketplace_demo_data(db: Session) -> None:
                 is_active=True,
             )
         )
+    
+    # Add products with images for categories that have uploaded images
+    image_products = [
+        ("Handbag", "Accessory", 1, "/uploads/74eeeddc54eb48cb931252a116bc5148.jpeg"),
+        ("Sandals", "footwear", 6, "/uploads/d6f7031c161848f4b68a03f5bb834759.png"),
+        ("Backpack", "Bags", 1, "/uploads/542a938ed44c4e6481cccb41b0db31dd.png"),
+        ("Dress Shoes", "Shoes", 1, "/uploads/17865ee571754740a1c4065da623cd0c.jpeg"),
+        ("Belt", "Accessory", 1, "/uploads/848c262a4baf46e7909db12a425e2946.jpeg"),
+        ("Sandals", "footwear", 6, "/uploads/cc6b73616aa3477383baf7ba3968cf54.jpeg"),
+        ("Hand bag", "women bag", 6, "/uploads/68fdc12706da4850ba89669b2e04dd67.jpeg"),
+        ("Briefcase", "Office", 1, "/uploads/d5a6aef2ece94f3d891836030027f8d1.jpeg"),
+        ("Monochrome Men's Outfit", "Fashion", 2, "/uploads/7221f94f97284faa8dc914f91d7a012c.jpeg"),
+        ("Laptopbag", "bags", 1, "/uploads/3aefe98958804f51ac8a9c807b1172db.jpeg"),
+        ("Men Suit", "Official Clothes", 2, "/uploads/b4622c6199f548d2b50dfd15c7ff7acc.jpeg"),
+        ("Men's Fashion", "Fashion", 2, "/uploads/1a93f907d5ca4f21bb5bbef8d4534722.jpeg"),
+    ]
+    for name, category, seller_idx, image_url in image_products:
+        if db.query(Product).filter(Product.name == name).first():
+            continue
+        seller = sellers[seller_idx] if seller_idx < len(sellers) else None
+        db.add(
+            Product(
+                name=name,
+                category=category,
+                price=25000,
+                stock=10,
+                description=f"High quality {category} product.",
+                image_url=image_url,
+                seller_id=seller.id if seller else None,
+                is_active=True,
+            )
+        )
 
     db.commit()
 
-uploads_dir = Path(__file__).resolve().parents[1] / "uploads"
-uploads_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-if frontend_assets_dir.exists():
-    app.mount("/assets", StaticFiles(directory=frontend_assets_dir), name="frontend-assets")
+    # Ensure all products have sellers assigned
+    ensure_product_seller_assignments(db)
+
+    # Seed sample sales if none exist (for dashboard graphs)
+    if db.query(Sale).count() == 0:
+        sample_sales = []
+        # Get a few products with sellers
+        demo_products = db.query(Product).filter(Product.seller_id.isnot(None)).limit(5).all()
+        for product in demo_products:
+            sample_sales.append(
+                Sale(
+                    date=date.today(),
+                    product=product.name,
+                    category=product.category,
+                    product_id=product.id,
+                    seller_id=product.seller_id,
+                    quantity=2,
+                    unit_price=product.price,
+                    status="Received",
+                    rating=5,
+                )
+            )
+        db.add_all(sample_sales)
+        db.commit()
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def ensure_product_seller_assignments(db: Session) -> None:
+    """
+    Ensure all active products have a seller_id assigned. Products without a seller
+    are assigned to the first available seller in their category, or deactivated
+    if no suitable seller exists.
+    """
+    # Find active products without seller_id
+    products_without_seller = db.query(Product).filter(
+        Product.is_active.isnot(False),
+        Product.seller_id.is_(None)
+    ).all()
+    
+    if not products_without_seller:
+        return
+    
+    # Get all active sellers
+    sellers = db.query(BusinessUser).filter(
+        BusinessUser.is_active == True,
+        BusinessUser.role == "seller"
+    ).all()
+    
+    # Build category -> seller mapping
+    category_to_sellers = {}
+    for seller in sellers:
+        cat = seller.category or ""
+        if cat not in category_to_sellers:
+            category_to_sellers[cat] = []
+        category_to_sellers[cat].append(seller)
+    
+    # Also build category mapping from products that already have sellers
+    product_category_to_seller = {}
+    assigned_products = db.query(Product).filter(
+        Product.is_active.isnot(False),
+        Product.seller_id.isnot(None)
+    ).all()
+    for p in assigned_products:
+        cat = p.category or ""
+        if cat and cat not in product_category_to_seller and p.seller_id:
+            seller = db.query(BusinessUser).filter(BusinessUser.id == p.seller_id).first()
+            if seller:
+                
+                product_category_to_seller[cat] = seller
+    
+    for product in products_without_seller:
+        cat = product.category or ""
+        seller = None
+        
+        # Try category-based assignment
+        if cat and cat in product_category_to_seller:
+            seller = product_category_to_seller[cat]
+        elif cat and cat in category_to_sellers and category_to_sellers[cat]:
+            seller = category_to_sellers[cat][0]
+        # Try any available seller
+        elif sellers:
+            seller = sellers[0]
+        
+        if seller:
+            product.seller_id = seller.id
+            db.add(product)
+            print(f"  Assigned product '{product.name}' (category: {cat}) to seller '{seller.business_name}'")
+        else:
+            # No seller available - deactivate product
+            product.is_active = False
+            db.add(product)
+            print(f"  Deactivated product '{product.name}' - no seller available")
+    
+    db.commit()
+    print(f"  Completed: {len(products_without_seller)} products processed")
+
+
+
+
+
 
 
 
@@ -759,6 +418,16 @@ app.include_router(notifications_router)
 app.include_router(auth_router)
 app.include_router(ai_assistant_router)
 app.include_router(disputes_router)
+
+
+@app.get("/marketplace/trends")
+def marketplace_trends(db: Session = Depends(get_db)):
+    return build_marketplace_trends(db)
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 
 @app.get("/superadmin/stats")

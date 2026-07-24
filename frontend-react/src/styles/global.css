@@ -11,14 +11,14 @@
   --color-surface: #ffffff;
   --color-surface-soft: #f1f5f9;
   --color-surface-strong: #e2e8f0;
-  --color-dark-bg: #0b0f1a;
   --color-dark-surface: #151b2d;
+  --color-dark-bg: #0b0f1a;
   --color-dark-soft: #1e2641;
 
   /* Premium Shadows */
   --shadow-premium: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   --shadow-premium-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
-  
+
   /* Typography */
   --font-display: "Sora", sans-serif;
   --font-sans: "Inter", sans-serif;
@@ -38,7 +38,7 @@
   --accent: #10b981;
   --danger: #ef4444;
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-  
+
   /* Sidebar Light Theme - Derived from logo blue */
   --sidebar-bg: #fdfdfd;
   --sidebar-text: #0f172a;
@@ -49,7 +49,7 @@
 
   --glass-bg: rgba(255, 255, 255, 0.85);
   --glass-border: rgba(226, 232, 240, 0.8);
-  
+
   color-scheme: light;
 }
 
@@ -67,7 +67,7 @@
   --accent: #34d399;
   --danger: #f87171;
   --shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
-  
+
   /* Sidebar Dark Theme - Deep brand navy */
   --sidebar-bg: #0f172a;
   --sidebar-text: #f1f5f9;
@@ -78,7 +78,7 @@
 
   --glass-bg: rgba(21, 27, 45, 0.85);
   --glass-border: rgba(30, 41, 59, 0.8);
-  
+
   color-scheme: dark;
 }
 

@@ -1,6 +1,6 @@
 import type { SessionUser, UserType } from "../../types/auth";
 
-const ACCESS_TOKEN_KEY = "access_token";
+export const ACCESS_TOKEN_KEY = "access_token";
 const SESSION_USER_KEY = "session_user";
 const USER_TYPE_KEY = "user_type";
 const USER_ROLE_KEY = "user_role";
@@ -22,10 +22,6 @@ export function normalizeUser(user?: SessionUser | null, fallbackType: UserType 
   return next;
 }
 
-export function getStoredToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY);
-}
-
 export function getStoredUser() {
   const raw = localStorage.getItem(SESSION_USER_KEY);
   if (!raw) return null;
@@ -42,7 +38,8 @@ export function getStoredUserType() {
 
 export function persistSession(token: string, user: SessionUser, userType: UserType = "") {
   const normalized = normalizeUser(user, userType);
-  localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  // Access token and refresh token will now be handled by HTTP-only cookies from the backend.
+  // This function is now only responsible for persisting user data if needed for UI, not tokens.
   localStorage.setItem(SESSION_USER_KEY, JSON.stringify(normalized || {}));
   if (userType) {
     localStorage.setItem(USER_TYPE_KEY, userType);
@@ -53,12 +50,17 @@ export function persistSession(token: string, user: SessionUser, userType: UserT
 }
 
 export function clearStoredSession() {
+  // Access token and refresh token are cleared by the backend when logging out via API call.
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(SESSION_USER_KEY);
   localStorage.removeItem(USER_TYPE_KEY);
   localStorage.removeItem(USER_ROLE_KEY);
   localStorage.removeItem("business_user");
   localStorage.removeItem("logistics_user");
+}
+
+export function getStoredToken() {
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
 export function hasAdminAccess(role?: string) {

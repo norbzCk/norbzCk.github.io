@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from backend.database import get_db
@@ -12,6 +13,10 @@ from backend.models import (
     BusinessUser,
     BusinessMetrics,
     BusinessVerification,
+    ConversationMessage,
+    ConversationThread,
+    Order,
+    OrderItem,
     Product,
     Sale,
     DeliveryOrder,
@@ -20,11 +25,18 @@ from backend.models import (
     PaymentTransaction,
 )
 from backend.app.schemas import (
-    BusinessRegister, BusinessLogin, BusinessProfile, 
+    BusinessRegister, BusinessLogin, BusinessProfile,
     BusinessUpdate, BusinessVerificationSubmit
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_token, decode_token, _normalize_phone, _phone_matches
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, decode_token, _normalize_phone, _phone_matches, get_current_user, security
 from backend.app.notification_service import build_login_email, create_notification, list_notifications_for_subject, resolve_subject, serialize_notification
+from backend.app.order_runtime import (
+    ensure_order_thread,
+    log_order_status,
+    record_audit,
+    record_shipment_event,
+    update_reservation_status,
+)
 from backend.app.marketplace_intelligence import (
     compute_seller_badges,
     coords_for_location,
@@ -38,12 +50,23 @@ router = APIRouter(prefix="/business", tags=["Business"])
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
+def get_current_business_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> BusinessUser:
+    user = get_current_user(request, credentials, db)
+    if not isinstance(user, BusinessUser):
+        raise HTTPException(status_code=403, detail="Not a business account")
+    return user
+
+
 @router.get("/inventory/forecast")
 def get_business_inventory_forecast(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     forecasts = sales_analysis.calculate_inventory_forecast(db, user.id)
     return {"items": forecasts}
 
@@ -51,10 +74,10 @@ def get_business_inventory_forecast(
 @router.get("/market-share")
 def get_market_share(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
     """Get market share data for the current seller's category and region"""
-    user = get_current_business_user(db, auth)
+    user = current_user
     
     # If user doesn't have category or region, return empty data
     if not user.category or not user.region:
@@ -406,51 +429,20 @@ def login_business(
     }
 
 
-def get_current_business_user(
-    db: Session = Depends(get_db),
-    auth_header: Optional[str] = Header(None, alias="Authorization"),
-):
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-    
-    token = auth_header.replace("Bearer ", "")
-    try:
-        payload = decode_token(token)
-        if payload.get("user_type") not in (None, "business"):
-            raise HTTPException(status_code=403, detail="Not a business account")
-        user_id = payload.get("user_id")
-        sub = payload.get("sub")
-        user = None
-        if user_id:
-            user = db.query(BusinessUser).filter(BusinessUser.id == int(user_id)).first()
-        if not user and sub:
-            if isinstance(sub, int) or (isinstance(sub, str) and sub.isdigit()):
-                user = db.query(BusinessUser).filter(BusinessUser.id == int(sub)).first()
-            else:
-                user = _get_business_user(db, phone=str(sub))
-        if not user or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
 @router.get("/me")
 def get_my_profile(
-    db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
-    return _serialize_business(user)
+    return _serialize_business(current_user)
 
 
 @router.post("/upload-profile-photo")
 async def upload_business_profile_photo(
     file: UploadFile = File(...),
+    current_user: BusinessUser = Depends(get_current_business_user),
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_IMAGE_EXT:
         raise HTTPException(status_code=400, detail="Unsupported image format")
@@ -476,9 +468,9 @@ async def upload_business_profile_photo(
 def update_my_profile(
     payload: BusinessUpdate,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     
     if payload.business_name:
         user.business_name = payload.business_name.strip()
@@ -533,9 +525,9 @@ def change_business_password(
     payload: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     current_password = payload.get("current_password") or ""
     new_password = payload.get("new_password") or ""
 
@@ -568,9 +560,9 @@ def change_business_password(
 def submit_verification(
     payload: BusinessVerificationSubmit,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     
     existing = db.query(BusinessVerification).filter(
         BusinessVerification.business_id == user.id,
@@ -745,6 +737,103 @@ def _find_order_buyer(db: Session, order: Sale) -> User | None:
     return db.query(User).filter(User.id == buyer_id).first()
 
 
+def _linked_order_model(db: Session, sale: Sale) -> Order | None:
+    if sale.order_id:
+        order = db.query(Order).filter(Order.id == sale.order_id).first()
+        if order:
+            return order
+    return db.query(Order).filter(Order.legacy_sale_id == sale.id).first()
+
+
+def _linked_order_item_model(db: Session, sale: Sale) -> OrderItem | None:
+    if sale.order_item_id:
+        item = db.query(OrderItem).filter(OrderItem.id == sale.order_item_id).first()
+        if item:
+            return item
+    return db.query(OrderItem).filter(OrderItem.legacy_sale_id == sale.id).first()
+
+
+def _linked_order_items(db: Session, sale: Sale, linked_order: Order | None = None) -> list[OrderItem]:
+    order = linked_order or _linked_order_model(db, sale)
+    if order:
+        return db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+
+    item = _linked_order_item_model(db, sale)
+    return [item] if item else []
+
+
+def _restore_order_inventory(db: Session, sale: Sale) -> Order | None:
+    linked_order = _linked_order_model(db, sale)
+    linked_items = _linked_order_items(db, sale, linked_order)
+
+    if linked_items:
+        product_ids = sorted({int(item.product_id) for item in linked_items if item.product_id is not None})
+        products = (
+            db.query(Product)
+            .filter(Product.id.in_(product_ids))
+            .with_for_update()
+            .all()
+            if product_ids
+            else []
+        )
+        product_map = {product.id: product for product in products}
+        for item in linked_items:
+            if item.product_id is None:
+                continue
+            product = product_map.get(int(item.product_id))
+            if not product:
+                continue
+            product.stock = int(product.stock or 0) + int(item.quantity or 0)
+            db.add(product)
+    elif sale.product_id:
+        product = db.query(Product).filter(Product.id == sale.product_id).with_for_update().first()
+        if product:
+            product.stock = int(product.stock or 0) + int(sale.quantity or 0)
+            db.add(product)
+
+    if linked_order:
+        update_reservation_status(db, order_id=linked_order.id, status="released")
+
+    return linked_order
+
+
+def _sync_business_order_state(
+    db: Session,
+    *,
+    sale: Sale,
+    status: str,
+    reason: str | None,
+    actor: BusinessUser | LogisticsUser | User | None,
+    metadata: dict | None = None,
+) -> None:
+    linked_order = _linked_order_model(db, sale)
+    linked_items = _linked_order_items(db, sale, linked_order)
+    for linked_item in linked_items:
+        linked_item.status = status
+        db.add(linked_item)
+    if linked_order:
+        linked_order.status = status
+        linked_order.status_reason = reason
+        db.add(linked_order)
+        log_order_status(
+            db,
+            order_id=linked_order.id,
+            sale_id=sale.id,
+            status=status,
+            reason=reason,
+            actor=actor,
+            metadata=metadata,
+        )
+        record_audit(
+            db,
+            actor=actor,
+            entity_type="order",
+            entity_id=linked_order.id,
+            action=f"order.status.{status.lower().replace(' ', '_')}",
+            details={"sale_id": sale.id, "reason": reason, **(metadata or {})},
+        )
+
+
 def _notify_order_participants(
     db: Session,
     background_tasks: BackgroundTasks,
@@ -833,9 +922,9 @@ def _inventory_overview(db: Session, user: BusinessUser) -> dict:
 @router.get("/dashboard/overview")
 def business_dashboard_overview(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
     month_start = today.replace(day=1)
@@ -907,9 +996,9 @@ def business_dashboard_overview(
 @router.get("/inventory/overview")
 def business_inventory_overview(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     return _inventory_overview(db, user)
 
 
@@ -917,9 +1006,9 @@ def business_inventory_overview(
 def business_analytics(
     range_days: int = 30,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     days = max(7, min(180, int(range_days or 30)))
     start_date = date.today() - timedelta(days=days - 1)
 
@@ -986,9 +1075,9 @@ def get_business_orders(
     status: str | None = None,
     q: str | None = None,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     query = _seller_sales_query(db, user)
     if status:
         query = query.filter(Sale.status == status)
@@ -1002,10 +1091,9 @@ def get_business_orders(
 @router.get("/logistics-options")
 def get_business_logistics_options(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
     # Ensure only authenticated business users can access assignment options.
-    _ = get_current_business_user(db, auth)
     rows = (
         db.query(LogisticsUser)
         .filter(LogisticsUser.is_active == True)
@@ -1034,10 +1122,10 @@ def business_order_decision(
     payload: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
-    order = db.query(Sale).filter(Sale.id == order_id).first()
+    user = current_user
+    order = db.query(Sale).filter(Sale.id == order_id).with_for_update().first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     _ensure_order_owner(order, user)
@@ -1053,13 +1141,17 @@ def business_order_decision(
     else:
         order.status = "Cancelled"
         order.status_reason = reason or "Rejected by seller"
-        if order.product_id:
-            product = db.query(Product).filter(Product.id == order.product_id).first()
-            if product:
-                product.stock = int(product.stock or 0) + int(order.quantity or 0)
-                db.add(product)
+        _restore_order_inventory(db, order)
 
     db.add(order)
+    _sync_business_order_state(
+        db,
+        sale=order,
+        status=order.status,
+        reason=order.status_reason,
+        actor=user,
+        metadata={"source": "business.decision", "decision": decision},
+    )
     _notify_order_participants(
         db,
         background_tasks,
@@ -1090,10 +1182,10 @@ def business_update_order_status(
     payload: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
-    order = db.query(Sale).filter(Sale.id == order_id).first()
+    user = current_user
+    order = db.query(Sale).filter(Sale.id == order_id).with_for_update().first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     _ensure_order_owner(order, user)
@@ -1106,6 +1198,7 @@ def business_update_order_status(
         "Packed": {"Ready For Shipping", "Cancelled"},
         "Ready For Shipping": {"Shipped", "Cancelled"},
         "Shipped": set(),
+        "Delivery Failed": {"Ready For Shipping", "Cancelled"},
         "Received": set(),
         "Cancelled": set(),
     }
@@ -1115,12 +1208,17 @@ def business_update_order_status(
 
     order.status = target
     order.status_reason = reason
-    if target == "Cancelled" and order.product_id:
-        product = db.query(Product).filter(Product.id == order.product_id).first()
-        if product:
-            product.stock = int(product.stock or 0) + int(order.quantity or 0)
-            db.add(product)
+    if target == "Cancelled":
+        _restore_order_inventory(db, order)
     db.add(order)
+    _sync_business_order_state(
+        db,
+        sale=order,
+        status=target,
+        reason=reason,
+        actor=user,
+        metadata={"source": "business.status.patch"},
+    )
     _notify_order_participants(
         db,
         background_tasks,
@@ -1143,10 +1241,10 @@ def business_assign_delivery(
     payload: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
-    order = db.query(Sale).filter(Sale.id == order_id).first()
+    user = current_user
+    order = db.query(Sale).filter(Sale.id == order_id).with_for_update().first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     _ensure_order_owner(order, user)
@@ -1163,7 +1261,12 @@ def business_assign_delivery(
 
     logistics_id = payload.get("logistics_id")
     if logistics_id:
-        logistics = db.query(LogisticsUser).filter(LogisticsUser.id == int(logistics_id), LogisticsUser.is_active == True).first()
+        logistics = (
+            db.query(LogisticsUser)
+            .filter(LogisticsUser.id == int(logistics_id), LogisticsUser.is_active == True)
+            .with_for_update()
+            .first()
+        )
     else:
         logistics = (
             db.query(LogisticsUser)
@@ -1172,11 +1275,15 @@ def business_assign_delivery(
                 LogisticsUser.status == "online",
                 LogisticsUser.availability == "available",
             )
+            .with_for_update(skip_locked=True)
             .order_by(LogisticsUser.id.asc())
             .first()
         )
     if not logistics:
         raise HTTPException(status_code=404, detail="No logistics partner available")
+
+    if logistics.status != "online":
+        raise HTTPException(status_code=400, detail="Selected logistics partner is offline")
 
     selected_seller = user
     selected_seller_id = payload.get("seller_id")
@@ -1193,7 +1300,17 @@ def business_assign_delivery(
         if candidate:
             selected_seller = candidate
 
-    delivery = db.query(DeliveryOrder).filter(DeliveryOrder.order_id == order.id).first()
+    delivery = db.query(DeliveryOrder).filter(DeliveryOrder.order_id == order.id).with_for_update().first()
+    previous_logistics = None
+    if delivery and delivery.logistics_id and delivery.logistics_id != logistics.id:
+        previous_logistics = (
+            db.query(LogisticsUser)
+            .filter(LogisticsUser.id == delivery.logistics_id)
+            .with_for_update()
+            .first()
+        )
+    if delivery and logistics.availability == "busy" and delivery.logistics_id != logistics.id:
+        raise HTTPException(status_code=400, detail="Selected logistics partner is already busy")
     if not delivery:
         delivery = DeliveryOrder(
             order_id=order.id,
@@ -1253,9 +1370,42 @@ def business_assign_delivery(
 
     order.status = "Ready For Shipping"
     logistics.availability = "busy"
+    if previous_logistics and previous_logistics.id != logistics.id:
+        previous_logistics.availability = "available"
+        db.add(previous_logistics)
 
     db.add(order)
     db.add(logistics)
+    db.flush()
+    _sync_business_order_state(
+        db,
+        sale=order,
+        status="Ready For Shipping",
+        reason="Delivery assigned",
+        actor=user,
+        metadata={"source": "business.assign_delivery", "logistics_id": logistics.id},
+    )
+    linked_order = _linked_order_model(db, order)
+    buyer = _find_order_buyer(db, order)
+    ensure_order_thread(
+        db,
+        order=linked_order,
+        sale=order,
+        seller=selected_seller,
+        buyer=buyer,
+        logistics=logistics,
+    )
+    record_shipment_event(
+        db,
+        delivery_id=delivery.id,
+        order_id=linked_order.id if linked_order else None,
+        sale_id=order.id,
+        status="assigned",
+        actor=user,
+        message=f"Delivery assigned to {logistics.name}",
+        lat=delivery.current_lat,
+        lng=delivery.current_lng,
+    )
     _notify_order_participants(
         db,
         background_tasks,
@@ -1303,9 +1453,9 @@ def business_assign_delivery(
 def business_deliveries(
     status: str | None = None,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     query = db.query(DeliveryOrder).filter(DeliveryOrder.seller_id == user.id)
     if status:
         query = query.filter(DeliveryOrder.status == status)
@@ -1337,9 +1487,9 @@ def business_update_delivery_instructions(
     delivery_id: int,
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     delivery = db.query(DeliveryOrder).filter(DeliveryOrder.id == delivery_id, DeliveryOrder.seller_id == user.id).first()
     if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found")
@@ -1355,9 +1505,9 @@ def business_update_delivery_instructions(
 @router.get("/notifications")
 def business_notifications(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     recipient_type, recipient_id, _, _ = resolve_subject(user)
     stored_items = list_notifications_for_subject(db, recipient_type, recipient_id, limit=15)
     low_stock = _inventory_overview(db, user)["alerts"][:5]
@@ -1414,9 +1564,9 @@ def business_notifications(
 def business_bulk_create_products(
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     items = payload.get("items") or []
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="items must be a non-empty list")
@@ -1462,20 +1612,43 @@ def business_bulk_create_products(
 @router.get("/communication/feed")
 def business_communication_feed(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: BusinessUser = Depends(get_current_business_user),
 ):
-    user = get_current_business_user(db, auth)
+    user = current_user
     orders = _seller_sales_query(db, user).order_by(Sale.id.desc()).limit(30).all()
+    order_ids = [item.id for item in orders]
+    threads = (
+        db.query(ConversationThread)
+        .filter(ConversationThread.sale_id.in_(order_ids))
+        .all()
+        if order_ids
+        else []
+    )
+    thread_map = {thread.sale_id: thread for thread in threads if thread.sale_id is not None}
+    thread_ids = [thread.id for thread in threads]
+    latest_messages = {}
+    if thread_ids:
+        rows = (
+            db.query(ConversationMessage)
+            .filter(ConversationMessage.thread_id.in_(thread_ids))
+            .order_by(ConversationMessage.thread_id.asc(), ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+            .all()
+        )
+        for row in rows:
+            latest_messages.setdefault(row.thread_id, row)
     threads = []
     for order in orders:
+        thread = thread_map.get(order.id)
+        latest_message = latest_messages.get(thread.id) if thread else None
         threads.append(
             {
-                "thread_id": f"order-{order.id}",
+                "thread_id": str(thread.id) if thread else f"order-{order.id}",
                 "order_id": order.id,
                 "customer_id": order.created_by,
                 "subject": f"Order #{order.id} - {order.product}",
-                "latest_message": f"Current status: {order.status or 'Pending'}",
+                "latest_message": latest_message.text if latest_message else f"Current status: {order.status or 'Pending'}",
                 "delivery_address": order.delivery_address,
+                "last_message_at": latest_message.created_at.isoformat() if latest_message and latest_message.created_at else None,
             }
         )
     return {"items": threads}

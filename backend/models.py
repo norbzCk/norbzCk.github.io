@@ -23,6 +23,8 @@ class Sale(Base):
     rated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     created_by = Column(Integer, nullable=True)
+    order_id = Column(Integer, nullable=True, index=True)
+    order_item_id = Column(Integer, nullable=True, index=True)
     delivery_address = Column(String, nullable=True)
     delivery_phone = Column(String, nullable=True)
     delivery_notes = Column(String, nullable=True)
@@ -104,6 +106,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="user")
     is_active = Column(Boolean, nullable=False, default=True)
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_token = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -151,6 +155,8 @@ class BusinessUser(Base):
     auto_confirm = Column(Boolean, nullable=False, default=False)
     verification_status = Column(String, nullable=False, default="unverified")  # unverified, pending, verified
     is_active = Column(Boolean, nullable=False, default=True)
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_token = Column(String, nullable=True)
     role = Column(String, nullable=False, default="seller")  # seller, buyer
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -197,6 +203,8 @@ class LogisticsUser(Base):
     profile_photo = Column(String, nullable=True)
     verification_status = Column(String, nullable=False, default="unverified")
     is_active = Column(Boolean, nullable=False, default=True)
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_token = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -244,7 +252,142 @@ class DeliveryOrder(Base):
     proof_type = Column(String, nullable=True)
     proof_note = Column(Text, nullable=True)
     cod_amount_received = Column(Float, nullable=True)
+    rating = Column(Integer, nullable=True)
+    rated_at = Column(DateTime(timezone=True), nullable=True)
+    rating_comment = Column(Text, nullable=True)
     tracking_updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    primary_seller_id = Column(Integer, ForeignKey("business_users.id"), nullable=True, index=True)
+    legacy_sale_id = Column(Integer, nullable=True, unique=True, index=True)
+    status = Column(String, nullable=False, default="Pending", index=True)
+    status_reason = Column(String, nullable=True)
+    total_amount = Column(Float, nullable=False, default=0.0)
+    item_count = Column(Integer, nullable=False, default=0)
+    delivery_address = Column(String, nullable=True)
+    delivery_phone = Column(String, nullable=True)
+    delivery_notes = Column(String, nullable=True)
+    delivery_method = Column(String, nullable=True, default="Standard")
+    idempotency_key = Column(String, nullable=True, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
+    seller_id = Column(Integer, ForeignKey("business_users.id"), nullable=True, index=True)
+    legacy_sale_id = Column(Integer, nullable=True, unique=True, index=True)
+    product_name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    total_amount = Column(Float, nullable=False, default=0.0)
+    status = Column(String, nullable=False, default="Pending", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class OrderStatusHistory(Base):
+    __tablename__ = "order_status_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
+    sale_id = Column(Integer, nullable=True, index=True)
+    status = Column(String, nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    actor_type = Column(String, nullable=False, index=True)
+    actor_id = Column(Integer, nullable=True, index=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class InventoryReservation(Base):
+    __tablename__ = "inventory_reservations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
+    order_item_id = Column(Integer, ForeignKey("order_items.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    reserved_quantity = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="reserved", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    released_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ConversationThread(Base):
+    __tablename__ = "conversation_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, unique=True, index=True)
+    sale_id = Column(Integer, nullable=True, unique=True, index=True)
+    subject = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+    last_message_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ConversationParticipant(Base):
+    __tablename__ = "conversation_participants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("conversation_threads.id"), nullable=False, index=True)
+    participant_type = Column(String, nullable=False, index=True)
+    participant_id = Column(Integer, nullable=False, index=True)
+    last_read_message_id = Column(Integer, nullable=True)
+    joined_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("conversation_threads.id"), nullable=False, index=True)
+    sender_type = Column(String, nullable=False, index=True)
+    sender_id = Column(Integer, nullable=False, index=True)
+    sender_name = Column(String, nullable=False)
+    sender_role = Column(String, nullable=False)
+    message_type = Column(String, nullable=False, default="chat", index=True)
+    client_id = Column(String, nullable=True, index=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class MessageReceipt(Base):
+    __tablename__ = "message_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("conversation_messages.id"), nullable=False, index=True)
+    recipient_type = Column(String, nullable=False, index=True)
+    recipient_id = Column(Integer, nullable=False, index=True)
+    status = Column(String, nullable=False, default="delivered", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class ShipmentEvent(Base):
+    __tablename__ = "shipment_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    delivery_id = Column(Integer, ForeignKey("delivery_orders.id"), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, index=True)
+    sale_id = Column(Integer, nullable=True, index=True)
+    status = Column(String, nullable=False, index=True)
+    event_type = Column(String, nullable=False, default="status_change", index=True)
+    actor_type = Column(String, nullable=False, index=True)
+    actor_id = Column(Integer, nullable=True, index=True)
+    message = Column(Text, nullable=True)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class Notification(Base):
@@ -267,6 +410,26 @@ class Notification(Base):
     read_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    user_type = Column(String, nullable=False, index=True)  # user, business, logistics
+    token = Column(String, unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_revoked = Column(Boolean, nullable=False, default=False)
+
+
+class TokenBlocklist(Base):
+    __tablename__ = "token_blocklist"
+
+    id = Column(Integer, primary_key=True, index=True)
+    jti = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class PaymentTransaction(Base):
     __tablename__ = "payment_transactions"
 
@@ -286,6 +449,37 @@ class PaymentTransaction(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PaymentAttempt(Base):
+    __tablename__ = "payment_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, index=True)
+    sale_id = Column(Integer, nullable=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    idempotency_key = Column(String, nullable=True, index=True)
+    amount = Column(Float, nullable=False)
+    payment_method = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="initiated", index=True)
+    provider_reference = Column(String, nullable=True, index=True)
+    message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_type = Column(String, nullable=False, index=True)
+    actor_id = Column(Integer, nullable=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)
+    entity_id = Column(Integer, nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class AssistantConversation(Base):

@@ -79,7 +79,7 @@ export function ProductDetailPage() {
 
   async function handleOrder() {
     if (!user) {
-      navigate("/login", { state: { from: `/product/${productId}` } });
+      navigate("/login", { state: { from: `/app/checkout?product=${product?.id || productId}&quantity=${quantity}` } });
       return;
     }
 

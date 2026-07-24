@@ -29,9 +29,11 @@ import { LogisticsProfilePage } from "../pages/LogisticsProfilePage";
 import { SuperadminProfilePage } from "../pages/SuperadminProfilePage";
 import { SuperadminSettingsPage } from "../pages/SuperadminSettingsPage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { VerifyEmailPage } from "../pages/VerifyEmailPage";
 
 import { ProductDetailPage } from "../pages/ProductDetailPage";
 import { TrackDeliveryPage } from "../pages/TrackDeliveryPage";
+import { CheckoutPage } from "../pages/CheckoutPage";
 
 function AppLanding() {
   const { user } = useAuth();
@@ -50,6 +52,7 @@ export function App() {
       <Route path="/product/:productId" element={<ProductDetailPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route path="/superadmin" element={<SuperadminLoginPage />} />
       <Route path="/register/business" element={<BusinessRegisterPage />} />
       <Route path="/register/customer" element={<CustomerRegisterPage />} />
@@ -80,6 +83,7 @@ export function App() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="customers" element={<RoleRoute allowedRoles={["super_admin", "owner"]}><CustomersPage /></RoleRoute>} />
         <Route path="product/:productId" element={<ProductDetailPage />} />
+        <Route path="checkout" element={<RoleRoute allowedRoles={["user"]}><CheckoutPage /></RoleRoute>} />
         <Route path="track/:trackingCode" element={<TrackDeliveryPage />} />
         <Route path="track" element={<TrackDeliveryPage />} />
         <Route path="providers" element={<RoleRoute allowedRoles={["seller", "admin", "super_admin", "owner"]}><ProvidersPage /></RoleRoute>} />

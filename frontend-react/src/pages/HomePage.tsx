@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import logoUrl from "../assets/sokolink-logo.png";
 import { useAuth } from "../features/auth/AuthContext";
+import { useTheme } from "../features/auth/ThemeContext";
 import { useAIAssistant } from "../features/ai/AIAssistantContext";
 import { useCart } from "../features/auth/CartContext";
 import { env } from "../config/env";
@@ -41,24 +42,33 @@ import type { Product } from "../types/domain";
 
 const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=80";
 
+const HERO_TRANSITION = { duration: 0.45, ease: [0.22, 1, 0.36, 1] as const };
+const HERO_INTERVAL_MS = 5000;
+
 const SLIDES = [
   {
-    image: "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1600&q=80",
+    image: "/slides/hero-1.jpg",
     title: "Systematic sourcing for modern trade",
     description: "Find reliable products and smarter pricing coordination.",
     accent: "Marketplace"
   },
   {
-    image: "https://images.unsplash.com/photo-1493934558415-9d19f0b2b4d2?auto=format&fit=crop&w=1600&q=80",
+    image: "/slides/hero-2.jpg",
+    title: "Trusted sellers, visible fulfillment",
+    description: "Browse top-rated sellers and track last-mile operations.",
+    accent: "Trust Built-in"
+  },
+  {
+    image: "/slides/hero-3.jpg",
     title: "AI-assisted discovery for buyers",
     description: "Switch to AI mode to describe what you want instantly.",
     accent: "Smart Search"
   },
   {
-    image: "https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1600&q=80",
-    title: "Trusted sellers, visible fulfillment",
-    description: "Browse top-rated sellers and track last-mile operations.",
-    accent: "Trust Built-in"
+    image: "/slides/hero-4.jpg",
+    title: "Local inventory, real marketplace motion",
+    description: "Showcase your own products with a cleaner, faster hero presentation.",
+    accent: "Live Catalog"
   },
 ];
 
@@ -89,13 +99,16 @@ const CAMPAIGNS = [
   },
 ];
 
-const MARKET_TICKER = [
-  { label: "Solar Energy", trend: "+12.4%", status: "High Demand" },
-  { label: "Consumer Tech", trend: "+8.1%", status: "Active" },
-  { label: "Modern Agro", trend: "+15.2%", status: "Sourcing Now" },
-  { label: "Logistics Load", trend: "Balanced", status: "Optimal" },
-  { label: "Trust Index", trend: "99.8%", status: "Verified" },
-];
+type MarketTickerItem = {
+  label: string;
+  trend: string;
+  status: string;
+};
+
+type MarketTickerResponse = {
+  items: MarketTickerItem[];
+  generated_at?: string;
+};
 
 type ProductSearchResponse = {
   items: Product[];
@@ -120,6 +133,7 @@ export function HomePage() {
   const { openAssistant } = useAIAssistant();
   const { addToCart, setIsOpen } = useCart();
   const navigate = useNavigate();
+  const { toggleTheme, effectiveTheme } = useTheme();
   const [allItems, setAllItems] = useState<Product[]>([]);
   const [categories, setCategories] = useState<string[]>(["all"]);
   const [activeCategory, setActiveCategory] = useState("all");
@@ -138,6 +152,9 @@ export function HomePage() {
   const [flash, setFlash] = useState("");
   const [error, setError] = useState("");
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [tickerItems, setTickerItems] = useState<MarketTickerItem[]>([]);
+  const [isTickerLoading, setIsTickerLoading] = useState(true);
+  const [tickerError, setTickerError] = useState("");
 
   useEffect(() => {
     if (!loading && token && user) {
@@ -152,8 +169,48 @@ export function HomePage() {
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % SLIDES.length);
-    }, 6000);
+    }, HERO_INTERVAL_MS);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    SLIDES.forEach((slide) => {
+      const image = new Image();
+      image.src = slide.image;
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMarketTrends() {
+      try {
+        const response = await apiRequest<MarketTickerResponse>("/marketplace/trends", { auth: false });
+        const items = Array.isArray(response?.items)
+          ? response.items.filter((item) => item && item.label && item.trend && item.status)
+          : [];
+        if (!cancelled) {
+          setTickerItems(items);
+          setTickerError("");
+        }
+      } catch {
+        if (!cancelled) {
+          setTickerItems([]);
+          setTickerError("Live market trends are unavailable right now.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsTickerLoading(false);
+        }
+      }
+    }
+
+    void loadMarketTrends();
+    const timer = setInterval(loadMarketTrends, 120000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   async function fetchProducts(query = "", category = "all") {
@@ -270,18 +327,34 @@ export function HomePage() {
     <div className="min-h-screen bg-bg font-sans text-text selection:bg-brand/20 overflow-x-hidden">
       {/* Market Intelligence Ticker */}
       <div className="w-full bg-dark-bg text-white py-2 border-b border-white/5 relative z-50">
-        <div className="flex whitespace-nowrap animate-marquee hover:[animation-play-state:paused]">
-          {[...MARKET_TICKER, ...MARKET_TICKER].map((item, i) => (
-            <div key={i} className="flex items-center gap-6 px-10 border-r border-white/10">
-              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">{item.label}</span>
-              <span className="text-xs font-black text-brand">{item.trend}</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 text-[8px] font-bold uppercase text-white/60">
-                <Activity size={10} className="text-emerald-500" />
-                {item.status}
-              </span>
+        {isTickerLoading ? (
+          <div className="flex whitespace-nowrap">
+            <div className="flex items-center gap-6 px-10 border-r border-white/10">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Market Signals</span>
+              <span className="text-xs font-black text-brand">Loading live trends...</span>
             </div>
-          ))}
-        </div>
+          </div>
+        ) : tickerItems.length ? (
+          <div className="flex whitespace-nowrap animate-marquee hover:[animation-play-state:paused]">
+            {[...tickerItems, ...tickerItems].map((item, i) => (
+              <div key={`${item.label}-${i}`} className="flex items-center gap-6 px-10 border-r border-white/10">
+                <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">{item.label}</span>
+                <span className="text-xs font-black text-brand">{item.trend}</span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 text-[8px] font-bold uppercase text-white/60">
+                  <Activity size={10} className="text-emerald-500" />
+                  {item.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex whitespace-nowrap">
+            <div className="flex items-center gap-6 px-10 border-r border-white/10">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Market Signals</span>
+              <span className="text-xs font-black text-brand">{tickerError || "No live market signals yet."}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Premium Sticky Navigation */}
@@ -313,6 +386,22 @@ export function HomePage() {
             </div>
 
             <div className="flex items-center gap-4">
+              <button
+                onClick={toggleTheme}
+                className="w-10 h-10 rounded-xl bg-surface-soft border border-border hover:border-brand/30 flex items-center justify-center transition-all hover:scale-110 active:scale-95"
+                aria-label="Toggle theme"
+              >
+                {effectiveTheme === 'dark' ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-yellow-400">
+                    <circle cx="12" cy="12" r="5"/>
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                  </svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-400">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                  </svg>
+                )}
+              </button>
               <Link to="/login" className="px-4 py-2 text-xs font-black uppercase tracking-widest text-text hover:text-brand transition-colors hidden sm:block">Sign In</Link>
               <Link to="/register/customer" className="h-10 px-6 bg-brand text-white font-black text-[10px] uppercase tracking-[0.1em] rounded-xl shadow-lg shadow-brand/20 hover:bg-brand-strong transition-all flex items-center gap-2 group">
                 Join Network
@@ -354,56 +443,73 @@ export function HomePage() {
 
       <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-24">
         {/* Scaled-down Hero Section */}
-        <section className="relative h-[420px] md:h-[500px] rounded-[2.5rem] overflow-hidden shadow-premium-xl">
-          <AnimatePresence mode="wait">
+        <section className="relative h-[460px] md:h-[560px] rounded-[2.5rem] overflow-hidden shadow-premium-xl bg-dark-bg">
+          <AnimatePresence initial={false}>
             <motion.div
               key={currentSlide}
-              initial={{ opacity: 0, scale: 1.05 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.8, ease: "easeOut" }}
+              initial={{ opacity: 0, x: 96, scale: 1.04 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -96, scale: 0.98 }}
+              transition={HERO_TRANSITION}
               className="absolute inset-0"
             >
-              <img 
-                src={SLIDES[currentSlide].image} 
-                alt={SLIDES[currentSlide].title} 
-                className="w-full h-full object-cover opacity-90" 
+              <div className="absolute inset-0 bg-dark-bg" />
+              <motion.img
+                key={`blur-${currentSlide}`}
+                initial={{ scale: 1.08, opacity: 0 }}
+                animate={{ scale: 1.04, opacity: 0.32 }}
+                exit={{ scale: 1.12, opacity: 0 }}
+                transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                src={SLIDES[currentSlide].image}
+                alt=""
+                aria-hidden="true"
+                className="absolute inset-[-12%] w-[124%] h-[124%] object-cover blur-xl"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-dark-bg/80 via-dark-bg/20 to-transparent" />
-              
-              <div className="absolute inset-0 flex flex-col justify-end p-8 md:p-16 space-y-6">
+              <motion.img
+                initial={{ scale: 0.985, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 1.015, opacity: 0 }}
+                transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                src={SLIDES[currentSlide].image}
+                alt={SLIDES[currentSlide].title}
+                className="relative z-10 w-full h-full object-contain object-center opacity-95"
+              />
+              <div className="absolute inset-0 z-20 bg-gradient-to-t from-dark-bg via-dark-bg/45 to-dark-bg/20" />
+              <div className="absolute inset-0 z-20 bg-[radial-gradient(circle_at_70%_35%,rgba(59,130,246,0.28),transparent_34%),radial-gradient(circle_at_20%_80%,rgba(16,185,129,0.18),transparent_28%)]" />
+
+              <div className="absolute inset-0 z-30 flex flex-col justify-end p-8 md:p-16 lg:p-20 space-y-6">
                 <motion.div
-                  initial={{ y: 30, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={{ delay: 0.3, duration: 0.5 }}
-                  className="max-w-3xl space-y-4"
+                  initial={{ y: 34, opacity: 0, filter: "blur(8px)" }}
+                  animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                  transition={{ delay: 0.16, duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+                  className="max-w-3xl space-y-5"
                 >
-                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand/90 text-white text-[9px] font-black uppercase tracking-widest shadow-lg">
+                  <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/12 text-white text-[9px] font-black uppercase tracking-widest shadow-lg ring-1 ring-white/20 backdrop-blur-md">
                     {SLIDES[currentSlide].accent}
                   </span>
-                  <h1 className="text-4xl md:text-5xl lg:text-6xl font-display font-black text-white leading-tight tracking-tight">
+                  <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-display font-black text-white leading-[0.95] tracking-[-0.055em] drop-shadow-2xl">
                     {SLIDES[currentSlide].title}
                   </h1>
-                  <p className="text-sm md:text-lg text-white/80 font-medium max-w-xl leading-relaxed">
+                  <p className="text-sm sm:text-base md:text-lg text-white/82 font-medium max-w-2xl leading-relaxed drop-shadow">
                     {SLIDES[currentSlide].description}
                   </p>
                 </motion.div>
 
                 <motion.div
-                  initial={{ y: 30, opacity: 0 }}
+                  initial={{ y: 28, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
-                  transition={{ delay: 0.5, duration: 0.5 }}
+                  transition={{ delay: 0.28, duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
                   className="flex flex-wrap gap-4"
                 >
-                  <button 
-                    onClick={() => activateMode("marketplace")} 
-                    className="h-12 px-8 rounded-2xl bg-white text-dark-bg font-black text-xs uppercase tracking-widest hover:bg-surface-soft transition-all active:scale-95 shadow-xl"
+                  <button
+                    onClick={() => activateMode("marketplace")}
+                    className="h-12 px-8 rounded-2xl bg-white text-dark-bg font-black text-xs uppercase tracking-widest hover:bg-surface-soft hover:scale-[1.03] transition-all active:scale-95 shadow-2xl"
                   >
                     Enter Shop
                   </button>
-                  <button 
-                    onClick={() => activateMode("ai")} 
-                    className="h-12 px-8 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white font-black text-xs uppercase tracking-widest hover:bg-white/20 transition-all active:scale-95 inline-flex items-center gap-2"
+                  <button
+                    onClick={() => activateMode("ai")}
+                    className="h-12 px-8 rounded-2xl bg-white/10 backdrop-blur-md border border-white/25 text-white font-black text-xs uppercase tracking-widest hover:bg-white/20 hover:scale-[1.03] transition-all active:scale-95 inline-flex items-center gap-2 shadow-xl"
                   >
                     <Zap size={16} className="fill-current text-brand" />
                     AI Help
@@ -413,12 +519,13 @@ export function HomePage() {
             </motion.div>
           </AnimatePresence>
 
-          <div className="absolute bottom-8 right-8 flex gap-2">
+          <div className="absolute bottom-7 right-7 flex gap-2">
             {SLIDES.map((_, idx) => (
               <button
                 key={idx}
                 onClick={() => setCurrentSlide(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentSlide ? 'w-8 bg-white' : 'w-1.5 bg-white/30 hover:bg-white/50'}`}
+                aria-label={`Show slide ${idx + 1}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentSlide ? 'w-9 bg-white' : 'w-1.5 bg-white/30 hover:bg-white/60'}`}
               />
             ))}
           </div>

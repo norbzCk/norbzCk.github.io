@@ -87,7 +87,7 @@ export function CartSidebar() {
       navigate("/login", { state: { from: "/app/orders" } });
       return;
     }
-    navigate("/app/orders");
+    navigate("/app/checkout");
     setIsOpen(false);
   };
 

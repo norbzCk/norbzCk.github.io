@@ -1,0 +1,360 @@
+"""add is_verified columns
+
+Revision ID: 43811e82f398
+Revises: 20260428_01
+Create Date: 2026-05-09 06:41:03.482070
+
+"""
+
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision: str = '43811e82f398'
+down_revision: Union[str, Sequence[str], None] = '20260428_01'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+
+    # =========================
+    # BUSINESS USERS
+    # =========================
+    op.add_column(
+        'business_users',
+        sa.Column(
+            'is_verified',
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text('false')
+        )
+    )
+
+    op.add_column(
+        'business_users',
+        sa.Column(
+            'verification_token',
+            sa.String(),
+            nullable=True
+        )
+    )
+
+    op.alter_column(
+        'business_users',
+        'auto_confirm',
+        existing_type=sa.BOOLEAN(),
+        nullable=False,
+        existing_server_default=sa.text('false')
+    )
+
+    # =========================
+    # LOGISTICS USERS
+    # =========================
+    op.add_column(
+        'logistics_users',
+        sa.Column(
+            'is_verified',
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text('false')
+        )
+    )
+
+    op.add_column(
+        'logistics_users',
+        sa.Column(
+            'verification_token',
+            sa.String(),
+            nullable=True
+        )
+    )
+
+    # =========================
+    # PRODUCTS
+    # =========================
+    op.alter_column(
+        'products',
+        'is_active',
+        existing_type=sa.BOOLEAN(),
+        nullable=False,
+        existing_server_default=sa.text('true')
+    )
+
+    op.alter_column(
+        'products',
+        'rating_avg',
+        existing_type=sa.DOUBLE_PRECISION(precision=53),
+        nullable=False,
+        existing_server_default=sa.text('0')
+    )
+
+    op.alter_column(
+        'products',
+        'rating_count',
+        existing_type=sa.INTEGER(),
+        nullable=False,
+        existing_server_default=sa.text('0')
+    )
+
+    # =========================
+    # SALES
+    # =========================
+    op.alter_column(
+        'sales',
+        'status',
+        existing_type=sa.VARCHAR(),
+        nullable=False,
+        existing_server_default=sa.text("'Delivered'::character varying")
+    )
+
+    op.execute("""
+       ALTER TABLE sales
+       ALTER COLUMN created_by
+       TYPE INTEGER
+       USING created_by::integer
+    """)
+
+    op.create_index(
+        op.f('ix_sales_id'),
+        'sales',
+        ['id'],
+        unique=False
+    )
+
+    op.drop_column('sales', 'issue_resolved_at')
+    op.drop_column('sales', 'support_note')
+    op.drop_column('sales', 'review_tags')
+    op.drop_column('sales', 'issue_title')
+    op.drop_column('sales', 'issue_created_at')
+    op.drop_column('sales', 'issue_status')
+    op.drop_column('sales', 'review_text')
+    op.drop_column('sales', 'compensation_code')
+    op.drop_column('sales', 'issue_updated_at')
+    op.drop_column('sales', 'compensation_discount')
+    op.drop_column('sales', 'issue_first_response_at')
+    op.drop_column('sales', 'issue_description')
+
+    # =========================
+    # USERS
+    # =========================
+    op.add_column(
+        'users',
+        sa.Column(
+            'is_verified',
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text('false')
+        )
+    )
+
+    op.add_column(
+        'users',
+        sa.Column(
+            'verification_token',
+            sa.String(),
+            nullable=True
+        )
+    )
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+
+    # =========================
+    # USERS
+    # =========================
+    op.drop_column('users', 'verification_token')
+    op.drop_column('users', 'is_verified')
+
+    # =========================
+    # SALES
+    # =========================
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_description',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_first_response_at',
+            postgresql.TIMESTAMP(timezone=True),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'compensation_discount',
+            sa.INTEGER(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_updated_at',
+            postgresql.TIMESTAMP(timezone=True),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'compensation_code',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'review_text',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_status',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_created_at',
+            postgresql.TIMESTAMP(timezone=True),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_title',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'review_tags',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'support_note',
+            sa.VARCHAR(),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.add_column(
+        'sales',
+        sa.Column(
+            'issue_resolved_at',
+            postgresql.TIMESTAMP(timezone=True),
+            autoincrement=False,
+            nullable=True
+        )
+    )
+
+    op.drop_index(op.f('ix_sales_id'), table_name='sales')
+
+    op.alter_column(
+        'sales',
+        'created_by',
+        existing_type=sa.Integer(),
+        type_=sa.VARCHAR(),
+        existing_nullable=True
+    )
+
+    op.alter_column(
+        'sales',
+        'status',
+        existing_type=sa.VARCHAR(),
+        nullable=True,
+        existing_server_default=sa.text("'Delivered'::character varying")
+    )
+
+    # =========================
+    # PRODUCTS
+    # =========================
+    op.alter_column(
+        'products',
+        'rating_count',
+        existing_type=sa.INTEGER(),
+        nullable=True,
+        existing_server_default=sa.text('0')
+    )
+
+    op.alter_column(
+        'products',
+        'rating_avg',
+        existing_type=sa.DOUBLE_PRECISION(precision=53),
+        nullable=True,
+        existing_server_default=sa.text('0')
+    )
+
+    op.alter_column(
+        'products',
+        'is_active',
+        existing_type=sa.BOOLEAN(),
+        nullable=True,
+        existing_server_default=sa.text('true')
+    )
+
+    # =========================
+    # LOGISTICS USERS
+    # =========================
+    op.drop_column('logistics_users', 'verification_token')
+    op.drop_column('logistics_users', 'is_verified')
+
+    # =========================
+    # BUSINESS USERS
+    # =========================
+    op.alter_column(
+        'business_users',
+        'auto_confirm',
+        existing_type=sa.BOOLEAN(),
+        nullable=True,
+        existing_server_default=sa.text('false')
+    )
+
+    op.drop_column('business_users', 'verification_token')
+    op.drop_column('business_users', 'is_verified')

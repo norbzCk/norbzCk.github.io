@@ -32,6 +32,7 @@ const SELLER_FLOW = [
   "Packed",
   "Ready For Shipping",
   "Shipped",
+  "Delivery Failed",
   "Received",
   "Cancelled",
 ] as const;
@@ -41,6 +42,7 @@ type SellerOrderStage = typeof SELLER_FLOW[number];
 function normalizeStatus(value?: string | null): SellerOrderStage {
   const status = String(value || "").trim().toLowerCase();
   if (status === "ready for shipping") return "Ready For Shipping";
+  if (status.includes("delivery failed")) return "Delivery Failed";
   if (status.includes("cancel")) return "Cancelled";
   if (status.includes("receive") || status.includes("deliver")) return "Received";
   if (status.includes("ship")) return "Shipped";
@@ -57,6 +59,7 @@ function nextStatus(status: SellerOrderStage): SellerOrderStage | null {
     Packed: "Ready For Shipping",
     "Ready For Shipping": "Shipped",
     Shipped: null,
+    "Delivery Failed": "Ready For Shipping",
     Received: null,
     Cancelled: null,
   };
@@ -66,6 +69,7 @@ function nextStatus(status: SellerOrderStage): SellerOrderStage | null {
 function stageTone(stage: SellerOrderStage) {
   if (stage === "Received") return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20";
   if (stage === "Cancelled") return "bg-danger/10 text-danger border-danger/20";
+  if (stage === "Delivery Failed") return "bg-danger/10 text-danger border-danger/20";
   if (stage === "Shipped") return "bg-sky-500/10 text-sky-600 border-sky-500/20";
   if (stage === "Ready For Shipping") return "bg-indigo-500/10 text-indigo-600 border-indigo-500/20";
   if (stage === "Packed") return "bg-amber-500/10 text-amber-600 border-amber-500/20";
@@ -114,6 +118,7 @@ function workflowNote(order: Order, stage: SellerOrderStage) {
   if (stage === "Packed") return "Items are prepared. Next step is shipping readiness.";
   if (stage === "Ready For Shipping") return "Assign logistics and handoff the parcel.";
   if (stage === "Shipped") return order.logistics_name ? `In motion with ${order.logistics_name}.` : "Delivery is underway.";
+  if (stage === "Delivery Failed") return order.status_reason || "Delivery hit an exception and needs reattempt or review.";
   if (stage === "Received") return "Customer confirmed the order lifecycle is complete.";
   return order.status_reason || "This order was cancelled and may need review.";
 }
@@ -181,6 +186,7 @@ function SellerOrdersBoard() {
       Packed: [],
       "Ready For Shipping": [],
       Shipped: [],
+      "Delivery Failed": [],
       Received: [],
       Cancelled: [],
     };
@@ -716,6 +722,10 @@ function SellerOrdersBoard() {
 }
 
 function CustomerOrdersView() {
+  const { user } = useAuth();
+  const token = getStoredToken();
+  const [activeOrderId, setActiveOrderId] = useState<number | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const { data: orders = [], isLoading, error } = useQuery({
     queryKey: ["customer-orders"],
     queryFn: async () => {
@@ -723,6 +733,11 @@ function CustomerOrdersView() {
       return Array.isArray(response) ? response : [];
     },
   });
+  const activeOrder = useMemo(
+    () => orders.find((order) => order.id === activeOrderId) || null,
+    [activeOrderId, orders],
+  );
+  const { messages, sendChat, sendTyping, isConnected, isOtherPartyTyping } = useDeliverySocket(activeOrder?.id, token);
 
   if (isLoading) {
     return (
@@ -770,12 +785,42 @@ function CustomerOrdersView() {
                       {stage}
                     </span>
                   </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      className="btn-secondary flex items-center gap-2"
+                      onClick={() => {
+                        setActiveOrderId(order.id);
+                        setIsChatOpen(true);
+                      }}
+                    >
+                      <MessageSquare size={16} />
+                      Order Chat
+                    </button>
+                    <span className="text-sm font-medium text-text-muted">
+                      {order.provider_name || "Seller"} communication thread
+                    </span>
+                  </div>
                 </div>
               );
             })}
           </div>
         </SectionCard>
       )}
+
+      <Modal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} title="Order Communication">
+        <div className="p-4">
+          <DeliveryChat
+            messages={messages}
+            onSend={sendChat}
+            onTyping={sendTyping}
+            currentUserId={user?.id}
+            otherPartyName={activeOrder?.provider_name || "Seller"}
+            isConnected={isConnected}
+            isOtherPartyTyping={isOtherPartyTyping}
+          />
+        </div>
+      </Modal>
     </div>
   );
 }

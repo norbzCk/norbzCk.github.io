@@ -37,6 +37,7 @@ function deliveryStatusLabel(value?: string | null) {
 function deliveryStatusClass(status?: string | null) {
   const normalized = String(status || "").toLowerCase();
   if (normalized === "delivered") return "ok";
+  if (normalized === "failed") return "danger";
   if (["assigned", "picked_up", "in_transit"].includes(normalized)) return "warn";
   if (normalized === "cancelled") return "danger";
   return "warn";
@@ -103,11 +104,13 @@ export function SellerDeliveriesPage() {
   const summary = useMemo(() => {
     const ongoing = deliveries.filter((item) => ["assigned", "picked_up", "in_transit"].includes(String(item.status || ""))).length;
     const completed = deliveries.filter((item) => item.status === "delivered").length;
+    const failed = deliveries.filter((item) => item.status === "failed").length;
     const cancelled = deliveries.filter((item) => item.status === "cancelled").length;
     return {
       total: deliveries.length,
       ongoing,
       completed,
+      failed,
       cancelled,
     };
   }, [deliveries]);
@@ -167,7 +170,7 @@ export function SellerDeliveriesPage() {
       {error ? <div className="p-4 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-xl font-bold flex items-center gap-3 border border-red-100 dark:border-red-800">{error}</div> : null}
       {flash ? <div className="p-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold flex items-center gap-3 border border-emerald-100 dark:border-emerald-800">{flash}</div> : null}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <article className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 space-y-1">
           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Total deliveries</span>
           <strong className="text-2xl font-display font-black text-slate-900 dark:text-white">{summary.total}</strong>
@@ -184,9 +187,14 @@ export function SellerDeliveriesPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400">Successful</p>
         </article>
         <article className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 space-y-1">
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Delivery failed</span>
+          <strong className="text-2xl font-display font-black text-red-600">{summary.failed}</strong>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Needs reattempt or review</p>
+        </article>
+        <article className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 space-y-1">
           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Cancelled</span>
           <strong className="text-2xl font-display font-black text-red-600">{summary.cancelled}</strong>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Total failed</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Closed without fulfillment</p>
         </article>
       </div>
 
@@ -203,6 +211,7 @@ export function SellerDeliveriesPage() {
             <option value="picked_up">Picked up</option>
             <option value="in_transit">In transit</option>
             <option value="delivered">Delivered</option>
+            <option value="failed">Delivery failed</option>
             <option value="cancelled">Cancelled</option>
           </select>
         </label>

@@ -67,6 +67,7 @@ export function TrackDeliveryPage() {
       case "delivered":
         return <CheckCircle className="h-6 w-6 text-emerald-500" />;
       case "failed":
+      case "delivery_failed":
       case "cancelled":
         return <XCircle className="h-6 w-6 text-rose-500" />;
       default:
@@ -79,6 +80,7 @@ export function TrackDeliveryPage() {
       case "delivered":
         return "bg-emerald-50 border-emerald-200 text-emerald-800";
       case "failed":
+      case "delivery_failed":
       case "cancelled":
         return "bg-rose-50 border-rose-200 text-rose-800";
       case "in_transit":
@@ -178,7 +180,7 @@ export function TrackDeliveryPage() {
             </div>
 
             {/* Live map */}
-            {trackingData.status !== "delivered" && trackingData.status !== "cancelled" && (
+            {trackingData.status !== "delivered" && trackingData.status !== "failed" && trackingData.status !== "delivery_failed" && trackingData.status !== "cancelled" && (
               <div className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm dark:bg-slate-800 dark:border-slate-700 overflow-hidden">
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-black uppercase tracking-[0.15em] text-slate-900 dark:text-white px-2">
                   <MapPin size={16} />

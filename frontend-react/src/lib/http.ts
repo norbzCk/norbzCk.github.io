@@ -20,15 +20,10 @@ export class ApiError extends Error {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
-  const token = getStoredToken();
   const method = options.method || "GET";
 
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
-  }
-
-  if (options.auth !== false && token) {
-    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const response = await fetch(`${env.apiBase}${path}`, {
@@ -36,12 +31,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     method,
     headers,
     body: serializeBody(options.body),
+    credentials: "include", // Ensure cookies are sent with requests
     cache: options.cache ?? (method === "GET" ? "no-store" : options.cache),
   });
-
-  if (response.status === 401) {
-    clearStoredSession();
-  }
 
   if (!response.ok) {
     const message = await readErrorMessage(response);

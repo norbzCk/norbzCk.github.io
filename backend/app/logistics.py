@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from backend.database import get_db
@@ -13,14 +14,15 @@ from backend.app.marketplace_intelligence import (
     haversine_km,
     interpolate_coords,
 )
-from backend.models import LogisticsUser, LogisticsMetrics, DeliveryOrder, BusinessUser, Sale, User, PaymentTransaction
+from backend.models import LogisticsUser, LogisticsMetrics, DeliveryOrder, BusinessUser, Order, Sale, User, PaymentTransaction
 from backend.app.schemas import (
     LogisticsRegister, LogisticsLogin, LogisticsProfile,
     DeliveryOrderCreate, DeliveryOrderResponse, DeliveryStatusUpdate
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_token, decode_token, _normalize_phone, _phone_matches, get_current_user
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, decode_token, _normalize_phone, _phone_matches, get_current_user, security
 from backend.app.business import get_current_business_user
 from backend.app.notification_service import build_login_email, create_notification, resolve_subject
+from backend.app.order_runtime import ensure_order_thread, log_order_status, record_audit, record_shipment_event, update_reservation_status
 
 router = APIRouter(prefix="/logistics", tags=["Logistics"])
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -118,33 +120,25 @@ def _notify_delivery_event(
         )
 
 
+def _linked_order_model(db: Session, sale: Sale | None) -> Order | None:
+    if sale is None:
+        return None
+    if sale.order_id:
+        order = db.query(Order).filter(Order.id == sale.order_id).first()
+        if order:
+            return order
+    return db.query(Order).filter(Order.legacy_sale_id == sale.id).first()
+
+
 def get_current_logistics_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
-    auth_header: Optional[str] = Header(None, alias="Authorization"),
-):
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization")
-    
-    token = auth_header.replace("Bearer ", "")
-    try:
-        payload = decode_token(token)
-        if payload.get("user_type") not in (None, "logistics"):
-            raise HTTPException(status_code=403, detail="Not a logistics account")
-        user_id = payload.get("user_id")
-        sub = payload.get("sub")
-        user = None
-        if user_id:
-            user = db.query(LogisticsUser).filter(LogisticsUser.id == int(user_id)).first()
-        if not user and sub:
-            if isinstance(sub, int) or (isinstance(sub, str) and sub.isdigit()):
-                user = db.query(LogisticsUser).filter(LogisticsUser.id == int(sub)).first()
-            else:
-                user = _get_logistics_user(db, phone=str(sub))
-        if not user or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+) -> LogisticsUser:
+    user = get_current_user(request, credentials, db)
+    if not isinstance(user, LogisticsUser):
+        raise HTTPException(status_code=403, detail="Not a logistics account")
+    return user
 
 
 @router.post("/register")
@@ -274,9 +268,9 @@ def login_logistics(
 @router.get("/me")
 def get_my_logistics_profile(
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     metrics = db.query(LogisticsMetrics).filter(LogisticsMetrics.logistics_id == user.id).first()
     
     data = _serialize_logistics(user)
@@ -294,9 +288,9 @@ def get_my_logistics_profile(
 def update_my_logistics_profile(
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
 
     if payload.get("name") is not None:
         next_name = str(payload.get("name") or "").strip()
@@ -347,9 +341,9 @@ def update_my_logistics_profile(
 def request_logistics_verification(
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     user.verification_status = "pending"
     db.add(user)
     db.commit()
@@ -364,10 +358,10 @@ def request_logistics_verification(
 @router.post("/upload-profile-photo")
 async def upload_logistics_profile_photo(
     file: UploadFile = File(...),
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_IMAGE_EXT:
         raise HTTPException(status_code=400, detail="Unsupported image format")
@@ -394,9 +388,9 @@ def change_logistics_password(
     payload: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     current_password = payload.get("current_password") or ""
     new_password = payload.get("new_password") or ""
 
@@ -429,9 +423,9 @@ def change_logistics_password(
 def update_status(
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     
     status = (payload.get("status") or "").strip().lower()
     if status not in ["online", "offline"]:
@@ -453,9 +447,9 @@ def update_status(
 def update_availability(
     payload: dict,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     
     availability = (payload.get("availability") or "").strip().lower()
     if availability not in ["available", "busy"]:
@@ -475,9 +469,9 @@ def create_delivery_order(
     payload: DeliveryOrderCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     
     verification_code = secrets.token_hex(4).upper()
     
@@ -506,6 +500,31 @@ def create_delivery_order(
     delivery.estimated_distance_km = round(haversine_km(pickup_coords, destination_coords), 1)
     delivery.tracking_updated_at = datetime.utcnow()
     db.add(delivery)
+    db.flush()
+    order = db.query(Sale).filter(Sale.id == payload.order_id).first() if payload.order_id else None
+    linked_order = _linked_order_model(db, order)
+    buyer = db.query(User).filter(User.id == payload.buyer_id).first() if payload.buyer_id else None
+    seller = db.query(BusinessUser).filter(BusinessUser.id == payload.seller_id).first() if payload.seller_id else None
+    ensure_order_thread(db, order=linked_order, sale=order, seller=seller, buyer=buyer, logistics=user)
+    record_shipment_event(
+        db,
+        delivery_id=delivery.id,
+        order_id=linked_order.id if linked_order else None,
+        sale_id=order.id if order else None,
+        status="assigned",
+        actor=user,
+        message="Delivery order created",
+        lat=delivery.current_lat,
+        lng=delivery.current_lng,
+    )
+    record_audit(
+        db,
+        actor=user,
+        entity_type="delivery_order",
+        entity_id=delivery.id,
+        action="delivery.created",
+        details={"sale_id": order.id if order else None, "order_id": linked_order.id if linked_order else None},
+    )
     db.commit()
     db.refresh(delivery)
     
@@ -536,9 +555,9 @@ def create_delivery_order(
 def get_my_deliveries(
     status: str | None = None,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     
     query = db.query(DeliveryOrder).filter(DeliveryOrder.logistics_id == user.id)
     
@@ -651,9 +670,9 @@ def update_delivery_status(
     payload: DeliveryStatusUpdate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization")
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     
     delivery = db.query(DeliveryOrder).filter(
         DeliveryOrder.id == delivery_id,
@@ -681,6 +700,9 @@ def update_delivery_status(
     if payload.status == "failed" and not (payload.failure_reason or "").strip():
         raise HTTPException(status_code=400, detail="Failure reason is required")
     
+    order = db.query(Sale).filter(Sale.id == delivery.order_id).first() if delivery.order_id else None
+    linked_order = _linked_order_model(db, order)
+
     delivery.status = payload.status
     pickup_coords = (
         float(delivery.pickup_lat) if delivery.pickup_lat is not None else coords_for_location(delivery.pickup_location)[0],
@@ -701,19 +723,43 @@ def update_delivery_status(
         delivery.current_lat = current_coords[0]
         delivery.current_lng = current_coords[1]
         delivery.last_location_name = payload.current_location or "Package collected"
-        order = db.query(Sale).filter(Sale.id == delivery.order_id).first() if delivery.order_id else None
         if order and (order.status or "").strip().title() not in {"Cancelled", "Received"}:
             order.status = "Shipped"
             db.add(order)
+            if linked_order:
+                linked_order.status = "Shipped"
+                linked_order.status_reason = "Picked up by logistics partner"
+                db.add(linked_order)
+                log_order_status(
+                    db,
+                    order_id=linked_order.id,
+                    sale_id=order.id,
+                    status="Shipped",
+                    reason="Picked up by logistics partner",
+                    actor=user,
+                    metadata={"source": "logistics.status", "delivery_id": delivery.id},
+                )
     elif payload.status == "in_transit":
         current_coords = interpolate_coords(pickup_coords, destination_coords, 0.7)
         delivery.current_lat = payload.current_lat if payload.current_lat is not None else current_coords[0]
         delivery.current_lng = payload.current_lng if payload.current_lng is not None else current_coords[1]
         delivery.last_location_name = payload.current_location or "In transit"
-        order = db.query(Sale).filter(Sale.id == delivery.order_id).first() if delivery.order_id else None
         if order and (order.status or "").strip().title() not in {"Cancelled", "Received"}:
             order.status = "Shipped"
             db.add(order)
+            if linked_order:
+                linked_order.status = "Shipped"
+                linked_order.status_reason = "Shipment in transit"
+                db.add(linked_order)
+                log_order_status(
+                    db,
+                    order_id=linked_order.id,
+                    sale_id=order.id,
+                    status="Shipped",
+                    reason="Shipment in transit",
+                    actor=user,
+                    metadata={"source": "logistics.status", "delivery_id": delivery.id},
+                )
     elif payload.status == "delivered":
         delivery.delivered_at = datetime.utcnow()
         delivery.failed_at = None
@@ -725,11 +771,24 @@ def update_delivery_status(
         delivery.proof_type = (payload.proof_type or "").strip() or "otp"
         delivery.proof_note = (payload.proof_note or "").strip() or None
         delivery.cod_amount_received = payload.cod_amount_received
-        order = db.query(Sale).filter(Sale.id == delivery.order_id).first() if delivery.order_id else None
         if order and (order.status or "").strip().title() != "Cancelled":
             order.status = "Received"
             order.status_reason = "Delivered by logistics partner"
             db.add(order)
+            if linked_order:
+                linked_order.status = "Received"
+                linked_order.status_reason = "Delivered by logistics partner"
+                db.add(linked_order)
+                update_reservation_status(db, order_id=linked_order.id, status="consumed")
+                log_order_status(
+                    db,
+                    order_id=linked_order.id,
+                    sale_id=order.id,
+                    status="Received",
+                    reason="Delivered by logistics partner",
+                    actor=user,
+                    metadata={"source": "logistics.status", "delivery_id": delivery.id},
+                )
         
         metrics = db.query(LogisticsMetrics).filter(LogisticsMetrics.logistics_id == user.id).first()
         if metrics:
@@ -745,11 +804,23 @@ def update_delivery_status(
         delivery.current_lat = payload.current_lat if payload.current_lat is not None else delivery.current_lat or pickup_coords[0]
         delivery.current_lng = payload.current_lng if payload.current_lng is not None else delivery.current_lng or pickup_coords[1]
         delivery.last_location_name = payload.current_location or "Delivery issue reported"
-        order = db.query(Sale).filter(Sale.id == delivery.order_id).first() if delivery.order_id else None
         if order and (order.status or "").strip().title() != "Cancelled":
             order.status = "Delivery Failed"
             order.status_reason = delivery.failure_reason
             db.add(order)
+            if linked_order:
+                linked_order.status = "Delivery Failed"
+                linked_order.status_reason = delivery.failure_reason
+                db.add(linked_order)
+                log_order_status(
+                    db,
+                    order_id=linked_order.id,
+                    sale_id=order.id,
+                    status="Delivery Failed",
+                    reason=delivery.failure_reason,
+                    actor=user,
+                    metadata={"source": "logistics.status", "delivery_id": delivery.id},
+                )
 
         metrics = db.query(LogisticsMetrics).filter(LogisticsMetrics.logistics_id == user.id).first()
         if metrics:
@@ -762,6 +833,25 @@ def update_delivery_status(
         delivery.last_location_name = payload.current_location or delivery.pickup_location or "Awaiting pickup"
 
     delivery.tracking_updated_at = datetime.utcnow()
+    record_shipment_event(
+        db,
+        delivery_id=delivery.id,
+        order_id=linked_order.id if linked_order else None,
+        sale_id=delivery.order_id,
+        status=delivery.status,
+        actor=user,
+        message=delivery.last_location_name,
+        lat=delivery.current_lat,
+        lng=delivery.current_lng,
+    )
+    record_audit(
+        db,
+        actor=user,
+        entity_type="delivery_order",
+        entity_id=delivery.id,
+        action=f"delivery.status.{delivery.status}",
+        details={"sale_id": delivery.order_id, "failure_reason": delivery.failure_reason},
+    )
 
     _notify_delivery_event(
         db,
@@ -808,9 +898,9 @@ def update_delivery_status(
 def get_delivery_tracking(
     delivery_id: int,
     db: Session = Depends(get_db),
-    auth: Optional[str] = Header(None, alias="Authorization"),
+    current_user: LogisticsUser = Depends(get_current_logistics_user),
 ):
-    user = get_current_logistics_user(db, auth)
+    user = current_user
     delivery = db.query(DeliveryOrder).filter(
         DeliveryOrder.id == delivery_id,
         DeliveryOrder.logistics_id == user.id,

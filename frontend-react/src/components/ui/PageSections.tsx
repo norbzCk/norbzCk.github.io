@@ -115,6 +115,23 @@ export function EmptyState({
   );
 }
 
+export function PageSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="glass-card overflow-hidden">
+      <div className="border-b border-border bg-surface-soft/30 px-8 py-6">
+        <h2 className="font-display text-2xl font-black tracking-tight text-text">{title}</h2>
+      </div>
+      <div className="p-8">{children}</div>
+    </section>
+  );
+}
+
 type InlineNoticeProps = {
   tone: "info" | "success" | "warning" | "error";
   children: ReactNode;
@@ -134,3 +151,4 @@ export function InlineNotice({ tone, children }: InlineNoticeProps) {
     </div>
   );
 }
+

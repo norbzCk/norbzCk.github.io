@@ -4,11 +4,11 @@ import { apiRequest } from "../../lib/http";
 import type { AuthResponse, SessionUser, UserType } from "../../types/auth";
 import {
   clearStoredSession,
-  getStoredToken,
   getStoredUser,
   getStoredUserType,
   normalizeUser,
   persistSession,
+  ACCESS_TOKEN_KEY,
 } from "./authStorage";
 
 interface RegisterPayload {
@@ -23,15 +23,18 @@ interface AuthContextValue {
   loading: boolean;
   login: (identifier: string, password: string) => Promise<SessionUser>;
   register: (payload: RegisterPayload) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<SessionUser | null>;
+  verifyEmail: (token: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(getStoredUser());
-  const [token, setToken] = useState<string | null>(getStoredToken());
+  const [token, setToken] = useState<string | null>(() => {
+    return localStorage.getItem(ACCESS_TOKEN_KEY);
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,15 +42,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function refreshUser() {
-    const currentToken = getStoredToken();
-    if (!currentToken) {
-      setUser(null);
-      setToken(null);
-      setLoading(false);
-      return null;
-    }
-
     try {
+      const response = await apiRequest<{ access_token: string }>("/auth/refresh", {
+        method: "POST",
+        auth: false,
+      });
+      // On successful refresh, fetch user data
       const userType = getStoredUserType();
       const endpoint =
         userType === "business"
@@ -56,17 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ? "/logistics/me"
             : userType === "superadmin"
               ? "/auth/me"
-            : "/auth/me";
+              : "/auth/me";
       const fallbackType = userType || "user";
       const fetched = await apiRequest<SessionUser>(endpoint);
       const next = normalizeUser(fetched, fallbackType);
       if (next) {
-        persistSession(currentToken, next, userType);
+        // Only persist user data, tokens are in cookies
+        persistSession(response.access_token, next, userType);
       }
       setUser(next);
-      setToken(currentToken);
+      setToken(response.access_token);
       return next;
-    } catch {
+    } catch (err) {
       clearStoredSession();
       setUser(null);
       setToken(null);
@@ -80,48 +81,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const trimmed = identifier.trim();
     const isEmail = trimmed.includes("@");
 
-    const attempts = [
-      { url: "/business/login", userType: "business" as UserType, role: "seller" },
-      { url: "/logistics/login", userType: "logistics" as UserType, role: "logistics" },
-      { url: "/auth/login", userType: "user" as UserType, role: "user" },
-    ];
+    const payload = isEmail
+      ? { email: trimmed.toLowerCase(), password }
+      : { phone: trimmed, password };
 
-    let lastError = "Invalid credentials";
+    const data = await apiRequest<AuthResponse & { access_token?: string }>("/auth/login", {
+      method: "POST",
+      auth: false,
+      body: payload,
+    });
 
-    for (const attempt of attempts) {
-      try {
-        const payload = isEmail
-          ? { email: trimmed.toLowerCase(), password }
-          : { phone: trimmed, password };
+    const token = data.access_token;
+    const merged = normalizeUser({ ...(data.user || {}), role: data.user?.role }, data.userType);
 
-        const data = await apiRequest<AuthResponse & { token?: string }>(attempt.url, {
-          method: "POST",
-          auth: false,
-          body: payload,
-        });
-
-        const token = data.access_token || data.token;
-        const merged = normalizeUser(
-          { ...(data.user || {}), role: data.user?.role || attempt.role },
-          attempt.userType,
-        );
-
-        if (!token || !merged) {
-          lastError = "Invalid login response";
-          continue;
-        }
-
-        const sessionType = merged.role === "super_admin" ? "superadmin" : attempt.userType;
-        persistSession(token, merged, sessionType);
-        setToken(token);
-        setUser(merged);
-        return merged;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : "Login failed";
-      }
+    if (!token || !merged) {
+      throw new Error("Invalid login response");
     }
 
-    throw new Error(lastError);
+    const sessionType = merged.role === "super_admin" ? "superadmin" : (data.userType || "user");
+    persistSession(token, merged, sessionType);
+    setUser(merged);
+    setToken(token);
+    return merged;
   }
 
   async function register(payload: RegisterPayload) {
@@ -132,14 +113,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  function logout() {
+  async function logout() {
+    await apiRequest("/auth/logout", {
+      method: "POST",
+      auth: false,
+    });
     clearStoredSession();
     setUser(null);
     setToken(null);
   }
+  
+  async function verifyEmail(token: string) {
+    await apiRequest("/auth/verify-email", {
+      method: "POST",
+      auth: false,
+      body: { token },
+    });
+  }
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser, verifyEmail }}>
       {children}
     </AuthContext.Provider>
   );
@@ -152,3 +145,4 @@ export function useAuth() {
   }
   return context;
 }
+

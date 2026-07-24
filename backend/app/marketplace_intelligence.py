@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta
 from math import atan2, cos, radians, sin, sqrt
 from typing import Any, List, Dict
@@ -7,79 +8,32 @@ from typing import Any, List, Dict
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from backend.utils.geo import coords_for_location, haversine_km, interpolate_coords
+from backend.utils.text import clean_text, normalize_lookup_key
+
 from backend.models import (
     BusinessMetrics,
     BusinessUser,
     DeliveryOrder,
     LogisticsUser,
     Product,
+    RFQ,
     Sale,
     User,
 )
 
-DEFAULT_COORDS = (-6.7924, 39.2083)
-
-AREA_COORDS: dict[str, tuple[float, float]] = {
-    "dar es salaam": (-6.7924, 39.2083),
-    "masaki": (-6.7466, 39.2899),
-    "msasani": (-6.7480, 39.2860),
-    "kariakoo": (-6.8163, 39.2797),
-    "ilala": (-6.8235, 39.2695),
-    "kinondoni": (-6.7761, 39.2496),
-    "mikocheni": (-6.7471, 39.2598),
-    "posta": (-6.8158, 39.2878),
-    "ubungo": (-6.7833, 39.2078),
-    "temeke": (-6.8697, 39.2665),
-}
-
 
 def _clean_text(value: str | None) -> str:
-    return " ".join(str(value or "").strip().split())
-
-
-def _normalize_lookup_key(value: str | None) -> str:
-    return _clean_text(value).lower()
-
-
-def coords_for_location(*parts: str | None) -> tuple[float, float]:
-    candidates = [_normalize_lookup_key(part) for part in parts if _clean_text(part)]
-    for candidate in candidates:
-        for key, coords in AREA_COORDS.items():
-            if key in candidate:
-                return coords
-    return DEFAULT_COORDS
-
-
-def haversine_km(start: tuple[float, float], end: tuple[float, float]) -> float:
-    lat1, lon1 = start
-    lat2, lon2 = end
-    radius = 6371.0
-    d_lat = radians(lat2 - lat1)
-    d_lon = radians(lon2 - lon1)
-    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return radius * c
-
-
-def interpolate_coords(
-    start: tuple[float, float],
-    end: tuple[float, float],
-    ratio: float,
-) -> tuple[float, float]:
-    safe_ratio = max(0.0, min(1.0, float(ratio)))
-    return (
-        round(start[0] + ((end[0] - start[0]) * safe_ratio), 6),
-        round(start[1] + ((end[1] - start[1]) * safe_ratio), 6),
-    )
+    return clean_text(value)
 
 
 def build_ai_product_insight(db: Session, payload: Any) -> dict[str, Any]:
-    name = _clean_text(getattr(payload, "name", None) or "")
-    category = _clean_text(getattr(payload, "category", None) or "General")
-    description_seed = _clean_text(getattr(payload, "description", None) or "")
+    name = clean_text(getattr(payload, "name", None) or "")
+    category = clean_text(getattr(payload, "category", None) or "General")
+    description_seed = clean_text(getattr(payload, "description", None) or "")
     stock = max(int(getattr(payload, "stock", 0) or 0), 0)
     current_price = getattr(payload, "current_price", None)
-    seller_area = _clean_text(getattr(payload, "seller_area", None) or "")
+    seller_area = clean_text(getattr(payload, "seller_area", None) or "")
 
     category_prices = (
         db.query(Product.price)
@@ -96,7 +50,10 @@ def build_ai_product_insight(db: Session, payload: Any) -> dict[str, Any]:
         db.query(func.sum(Sale.quantity))
         .filter(
             Sale.date >= recent_cutoff,
-            (Sale.product.ilike(f"%{name}%")) | (Sale.category.ilike(category)),
+            or_(
+                Sale.product.ilike(f"%{name}%"),
+                Sale.category.ilike(category)
+            )
         )
         .scalar()
         or 0
@@ -166,8 +123,6 @@ def build_ai_product_insight(db: Session, payload: Any) -> dict[str, Any]:
         "trend_summary": trend_summary,
         "demand_level": demand_level,
     }
-
-
 def compute_seller_badges(
     db: Session,
     seller: BusinessUser | None,
@@ -389,6 +344,232 @@ def build_cart_optimization(
             "optimized_delivery_fee": round(optimized_total, 2),
             "estimated_savings": round(max(separate_total - optimized_total, 0), 2),
         },
+    }
+
+
+
+
+def build_marketplace_trends(db: Session) -> dict[str, Any]:
+    now = datetime.utcnow()
+    recent_cutoff = now.date() - timedelta(days=45)
+    previous_cutoff = recent_cutoff - timedelta(days=45)
+    recent_rfq_cutoff = now - timedelta(days=45)
+    previous_rfq_cutoff = recent_rfq_cutoff - timedelta(days=45)
+
+    active_categories = (
+        db.query(
+            func.trim(Product.category).label("category"),
+            func.count(Product.id).label("product_count"),
+            func.coalesce(func.sum(Product.stock), 0).label("stock"),
+            func.count(func.distinct(Product.seller_id)).label("seller_count"),
+            func.avg(Product.price).label("avg_price"),
+        )
+        .filter(Product.category.isnot(None), Product.is_active.isnot(False))
+        .group_by(func.trim(Product.category))
+        .all()
+    )
+
+    recent_sales = (
+        db.query(
+            func.trim(Sale.category).label("category"),
+            func.coalesce(func.sum(Sale.quantity), 0).label("recent_qty"),
+            func.count(Sale.id).label("recent_orders"),
+            func.coalesce(func.sum(Sale.quantity * Sale.unit_price), 0).label("recent_revenue"),
+        )
+        .filter(Sale.category.isnot(None), Sale.date >= recent_cutoff)
+        .group_by(func.trim(Sale.category))
+        .all()
+    )
+
+    previous_sales = (
+        db.query(
+            func.trim(Sale.category).label("category"),
+            func.coalesce(func.sum(Sale.quantity), 0).label("previous_qty"),
+        )
+        .filter(Sale.category.isnot(None), Sale.date >= previous_cutoff, Sale.date < recent_cutoff)
+        .group_by(func.trim(Sale.category))
+        .all()
+    )
+
+    recent_rfqs = (
+        db.query(
+            func.trim(RFQ.product_interest).label("category"),
+            func.count(RFQ.id).label("rfq_count"),
+            func.coalesce(func.sum(RFQ.quantity), 0).label("rfq_qty"),
+        )
+        .filter(RFQ.product_interest.isnot(None), RFQ.created_at >= recent_rfq_cutoff)
+        .group_by(func.trim(RFQ.product_interest))
+        .all()
+    )
+
+    previous_rfqs = (
+        db.query(
+            func.trim(RFQ.product_interest).label("category"),
+            func.count(RFQ.id).label("previous_rfq_count"),
+            func.coalesce(func.sum(RFQ.quantity), 0).label("previous_rfq_qty"),
+        )
+        .filter(RFQ.product_interest.isnot(None), RFQ.created_at >= previous_rfq_cutoff, RFQ.created_at < recent_rfq_cutoff)
+        .group_by(func.trim(RFQ.product_interest))
+        .all()
+    )
+
+    category_metrics: dict[str, dict[str, float | int]] = defaultdict(
+        lambda: {
+            "product_count": 0,
+            "stock": 0,
+            "seller_count": 0,
+            "avg_price": 0,
+            "recent_qty": 0,
+            "recent_orders": 0,
+            "recent_revenue": 0,
+            "previous_qty": 0,
+            "rfq_count": 0,
+            "rfq_qty": 0,
+            "previous_rfq_count": 0,
+            "previous_rfq_qty": 0,
+        }
+    )
+
+    for row in active_categories:
+        key = str(row.category or "").strip().lower()
+        if not key:
+            continue
+        category_metrics[key]["product_count"] = int(row.product_count or 0)
+        category_metrics[key]["stock"] = int(row.stock or 0)
+        category_metrics[key]["seller_count"] = int(row.seller_count or 0)
+        category_metrics[key]["avg_price"] = float(row.avg_price or 0)
+
+    for row in recent_sales:
+        key = str(row.category or "").strip().lower()
+        if not key:
+            continue
+        category_metrics[key]["recent_qty"] = int(row.recent_qty or 0)
+        category_metrics[key]["recent_orders"] = int(row.recent_orders or 0)
+        category_metrics[key]["recent_revenue"] = float(row.recent_revenue or 0)
+
+    for row in previous_sales:
+        key = str(row.category or "").strip().lower()
+        if not key:
+            continue
+        category_metrics[key]["previous_qty"] = int(row.previous_qty or 0)
+
+    for row in recent_rfqs:
+        key = str(row.category or "").strip().lower()
+        if not key:
+            continue
+        category_metrics[key]["rfq_count"] = int(row.rfq_count or 0)
+        category_metrics[key]["rfq_qty"] = int(row.rfq_qty or 0)
+
+    for row in previous_rfqs:
+        key = str(row.category or "").strip().lower()
+        if not key:
+            continue
+        category_metrics[key]["previous_rfq_count"] = int(row.previous_rfq_count or 0)
+        category_metrics[key]["previous_rfq_qty"] = int(row.previous_rfq_qty or 0)
+
+    def format_trend(current: float, previous: float) -> str:
+        if previous <= 0:
+            return "New" if current > 0 else "0.0%"
+        return f"{((current - previous) / previous) * 100:+.1f}%"
+
+    def trend_status(metrics: dict[str, float | int]) -> str:
+        product_count = int(metrics["product_count"])
+        stock = int(metrics["stock"])
+        recent_qty = int(metrics["recent_qty"])
+        recent_orders = int(metrics["recent_orders"])
+        rfq_qty = int(metrics["rfq_qty"])
+        rfq_count = int(metrics["rfq_count"])
+        previous_qty = int(metrics["previous_qty"])
+        previous_rfq_qty = int(metrics["previous_rfq_qty"])
+
+        demand_growth = recent_qty - previous_qty
+        request_growth = rfq_qty - previous_rfq_qty
+        stock_pressure = product_count > 0 and stock <= max(1, product_count * 2)
+
+        if stock_pressure and recent_qty >= 8:
+            return "Supply Tight"
+        if rfq_qty >= max(10, recent_qty * 0.5) or request_growth > 0:
+            return "Sourcing Now"
+        if demand_growth > 0 and recent_orders >= 3:
+            return "Rising"
+        if recent_qty >= 15:
+            return "High Demand"
+        if recent_qty > 0 or rfq_count > 0:
+            return "Active"
+        return "Quiet"
+
+    def trend_score(metrics: dict[str, float | int]) -> float:
+        product_count = int(metrics["product_count"]) or 1
+        demand_density = int(metrics["recent_qty"]) / product_count
+        return (
+            int(metrics["recent_qty"]) * 2
+            + int(metrics["recent_orders"]) * 8
+            + int(metrics["rfq_qty"]) * 1.5
+            + int(metrics["rfq_count"]) * 6
+            + demand_density * 12
+        )
+
+    trend_items = [
+        {
+            "label": str(row.category or "").strip(),
+            "trend": format_trend(float(row["recent_qty"]) + float(row["rfq_qty"]), float(row["previous_qty"]) + float(row["previous_rfq_qty"])),
+            "status": trend_status(row),
+            "_score": trend_score(row),
+        }
+        for row in category_metrics.values()
+        if row.get("recent_qty") or row.get("recent_orders") or row.get("rfq_count") or row.get("rfq_qty")
+    ]
+    trend_items.sort(key=lambda item: float(item["_score"]), reverse=True)
+
+    total_sellers = db.query(BusinessUser).filter(BusinessUser.role == "seller", BusinessUser.is_active.isnot(False)).count()
+    verified_sellers = db.query(BusinessUser).filter(
+        BusinessUser.role == "seller",
+        BusinessUser.is_active.isnot(False),
+        BusinessUser.verification_status == "verified",
+    ).count()
+    active_deliveries = db.query(DeliveryOrder).filter(
+        DeliveryOrder.status.in_(["assigned", "picked_up", "in_transit"])
+    ).count()
+    available_logistics = db.query(LogisticsUser).filter(
+        LogisticsUser.is_active.isnot(False),
+        LogisticsUser.status == "online",
+        LogisticsUser.availability == "available",
+    ).count()
+
+    operational_items: list[dict[str, str]] = []
+    if total_sellers:
+        ratio = round((verified_sellers / total_sellers) * 100, 1)
+        operational_items.append({
+            "label": "Verified Sellers",
+            "trend": f"{ratio:.1f}%",
+            "status": "Verified" if ratio >= 80 else "Building Trust",
+        })
+    if active_deliveries:
+        operational_items.append({
+            "label": "Live Deliveries",
+            "trend": str(active_deliveries),
+            "status": "In Transit",
+        })
+    if available_logistics:
+        operational_items.append({
+            "label": "Available Logistics",
+            "trend": str(available_logistics),
+            "status": "Ready",
+        })
+
+    items = [
+        {
+            "label": item["label"],
+            "trend": item["trend"],
+            "status": item["status"],
+        }
+        for item in [*trend_items, *operational_items]
+        if item.get("label")
+    ][:8]
+
+    return {
+        "items": items,
+        "generated_at": now.isoformat() + "Z",
     }
 
 

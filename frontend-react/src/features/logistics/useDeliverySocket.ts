@@ -46,9 +46,12 @@ export function useDeliverySocket(orderId: number | string | undefined, token: s
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.type === "chat") {
+      if (data.type === "history") {
+        setMessages(Array.isArray(data.messages) ? data.messages : []);
+      } else if (data.type === "chat") {
+        const incomingId = String(data.id || data.client_id || `server-${Date.now()}`);
+
         setMessages((prev) => {
-          const incomingId = String(data.id || data.client_id || `server-${Date.now()}`);
           const optimisticMatch = data.client_id ? prev.findIndex((item) => item.id === String(data.client_id)) : -1;
 
           if (optimisticMatch >= 0) {
@@ -64,6 +67,15 @@ export function useDeliverySocket(orderId: number | string | undefined, token: s
 
           return [...prev, { ...data, id: incomingId, status: data.status || "delivered" }];
         });
+        if (!data.client_id && socketRef.current?.readyState === WebSocket.OPEN && data.id) {
+          socketRef.current.send(
+            JSON.stringify({
+              type: "receipt",
+              message_id: String(data.id),
+              status: "read",
+            }),
+          );
+        }
       } else if (data.type === "chat_status" || data.type === "receipt") {
         setMessages((prev) =>
           prev.map((item) =>

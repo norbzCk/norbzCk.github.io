@@ -185,7 +185,8 @@ export function LogisticsDashboardPage() {
     const assigned = deliveries.filter((item) => item.status === "assigned").length;
     const inTransit = deliveries.filter((item) => item.status === "picked_up" || item.status === "in_transit").length;
     const completed = deliveries.filter((item) => item.status === "delivered").length;
-    return { assigned, inTransit, completed };
+    const failed = deliveries.filter((item) => item.status === "failed").length;
+    return { assigned, inTransit, completed, failed };
   }, [deliveries]);
   
   const visibleDeliveries = useMemo(() => {
@@ -256,9 +257,10 @@ export function LogisticsDashboardPage() {
       { id: "id", label: "Fleet Identity", value: `#L${profile?.id || '—'}`, icon: <Truck size={18} />, note: profile?.account_type || "Agent" },
       { id: "status", label: "Protocol State", value: profile?.status || "Offline", icon: <Activity size={18} />, note: profile?.availability || "Status" },
       { id: "assigned", label: "Active Jobs", value: deliverySummary.assigned, icon: <Package size={18} /> },
+      { id: "failed", label: "Delivery Failed", value: deliverySummary.failed, icon: <X size={18} />, note: "Needs reattempt or review" },
       { id: "rating", label: "Trust Rating", value: Number(metrics.rating || 0).toFixed(1), icon: <Star size={18} /> },
     ],
-    [profile, deliverySummary.assigned, metrics.rating]
+    [profile, deliverySummary.assigned, deliverySummary.failed, metrics.rating]
   );
 
   useEffect(() => {
@@ -416,6 +418,7 @@ export function LogisticsDashboardPage() {
               >
                 <option value="all">Full Ledger</option>
                 <option value="delivered">Completed</option>
+                <option value="failed">Delivery failed</option>
                 <option value="assigned">Pending</option>
               </select>
             }
@@ -435,7 +438,11 @@ export function LogisticsDashboardPage() {
                         <p className="text-[10px] font-bold text-text-muted uppercase tracking-wider">From: {delivery.pickup_location}</p>
                         <div className="flex items-center gap-2 mt-1">
                           <span className={`inline-block px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-tighter
-                            ${delivery.status === 'delivered' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-brand/10 text-brand'}
+                            ${delivery.status === 'delivered'
+                              ? 'bg-emerald-500/10 text-emerald-500'
+                              : delivery.status === 'failed'
+                                ? 'bg-danger/10 text-danger'
+                                : 'bg-brand/10 text-brand'}
                           `}>{delivery.status}</span>
                           {delivery.status === "assigned" && isStaleAssignment(delivery.created_at) && (
                             <span className="flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-bold text-rose-700 border border-rose-200">

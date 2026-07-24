@@ -17,4 +17,5 @@ export interface SessionUser {
 export interface AuthResponse {
   access_token: string;
   user: SessionUser;
+  userType?: UserType;
 }

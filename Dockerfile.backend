@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/
 COPY alembic.ini .
-COPY create_tables.py .
+
 COPY main.py .
 
 EXPOSE 8000
