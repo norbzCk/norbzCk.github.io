@@ -1,0 +1,12 @@
+{
+  auto_https false
+}
+
+:8080 {
+  root * /app/frontend-react/dist
+  file_server
+  handle /api/* {
+    uri strip_prefix /api
+    reverse_proxy backend:8000
+  }
+}
