@@ -20,7 +20,17 @@
   --color-dark-bg: var(--dark-bg);
   --color-dark-surface: var(--dark-surface);
   --color-dark-soft: var(--dark-soft);
+
+  /* Fonts */
+  --font-display: "Sora", sans-serif;
+  --font-sans: "Inter", sans-serif;
+
+  /* Dark mode: use [data-theme="dark"] selector instead of prefers-color-scheme */
+  --tw-dark-mode: selector;
+  --tw-dark-mode-selector: '[data-theme="dark"]';
 }
+>>>>>>>
+
 
 :root {
   --bg: #f8fafc;
