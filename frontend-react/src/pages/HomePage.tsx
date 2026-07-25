@@ -156,6 +156,8 @@ export function HomePage() {
   const [isTickerLoading, setIsTickerLoading] = useState(true);
   const [tickerError, setTickerError] = useState("");
 
+  const [hasScrolledToFeed, setHasScrolledToFeed] = useState(false);
+
   useEffect(() => {
     if (!loading && token && user) {
       navigate(getPostLoginPath(user), { replace: true });
@@ -165,6 +167,13 @@ export function HomePage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!isLoadingProducts && allItems.length > 0 && !hasScrolledToFeed) {
+      setHasScrolledToFeed(true);
+      document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [isLoadingProducts, allItems, hasScrolledToFeed]);
 
   useEffect(() => {
     const timer = setInterval(() => {
