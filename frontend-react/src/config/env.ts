@@ -5,14 +5,14 @@ function resolveDefaultApiBase() {
 
   const { hostname, origin, protocol } = window.location;
 
-  // Local development
+  // Local development — talk directly to the FastAPI backend on port 8000
   if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return origin;
+    return "http://localhost:8000";
   }
 
   // Production on Railway
   if (hostname.endsWith("railway.app")) {
-    return "https://sales-backend.up.railway.app";   // ← Change this after deploy
+    return "https://sales-backend.up.railway.app";
   }
 
   // Fallbacks for other platforms (keep for now)
