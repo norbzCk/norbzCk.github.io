@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: ['selector', '[data-theme="dark"]'],
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,20 +8,27 @@ export default {
   theme: {
     extend: {
       colors: {
-        brand: {
-          light: '#d6f5ef',
-          DEFAULT: '#0f766e',
-          strong: '#155e75',
-        },
-        accent: '#f97316',
-        'accent-strong': '#ea580c',
-        'surface-bg': '#f3f7f6',
-        'surface': '#ffffff',
-        'surface-soft': '#ecf4f2',
-        'surface-strong': '#d9e7e4',
-        'dark-bg': '#0b1120',
-        'dark-surface': '#111827',
-        'dark-soft': '#1f2937',
+        /* Colors are now managed via @theme in global.css using CSS
+           variable references so dark mode works automatically.
+           These are kept as fallbacks for any utility classes that
+           might not resolve through @theme. */
+        brand: "var(--brand)",
+        "brand-strong": "var(--brand-strong)",
+        "brand-light": "var(--brand-light)",
+        accent: "var(--accent)",
+        "accent-strong": "var(--accent-strong)",
+        bg: "var(--bg)",
+        text: "var(--text)",
+        "text-muted": "var(--text-muted)",
+        border: "var(--border)",
+        danger: "var(--danger)",
+        surface: "var(--surface)",
+        "surface-soft": "var(--surface-soft)",
+        "surface-strong": "var(--surface-strong)",
+        "surface-bg": "var(--bg)",
+        "dark-bg": "var(--dark-bg)",
+        "dark-surface": "var(--dark-surface)",
+        "dark-soft": "var(--dark-soft)",
       },
       fontFamily: {
         display: ['Sora', 'sans-serif'],

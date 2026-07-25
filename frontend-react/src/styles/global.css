@@ -1,27 +1,25 @@
 @import "tailwindcss";
 
 @theme {
-  /* Modern Tech Palette */
-  --color-brand-light: #eff6ff;
-  --color-brand: #3b82f6;
-  --color-brand-strong: #1d4ed8;
-  --color-accent: #10b981;
-  --color-accent-strong: #059669;
-  --color-surface-bg: #f8fafc;
-  --color-surface: #ffffff;
-  --color-surface-soft: #f1f5f9;
-  --color-surface-strong: #e2e8f0;
-  --color-dark-surface: #151b2d;
-  --color-dark-bg: #0b0f1a;
-  --color-dark-soft: #1e2641;
-
-  /* Premium Shadows */
-  --shadow-premium: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  --shadow-premium-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
-
-  /* Typography */
-  --font-display: "Sora", sans-serif;
-  --font-sans: "Inter", sans-serif;
+  /* Colors are defined as CSS variable references so that dark mode
+     (via [data-theme="dark"]) automatically switches values at runtime. */
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-light: var(--brand-light);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-danger: var(--danger);
+  --color-surface: var(--surface);
+  --color-surface-soft: var(--surface-soft);
+  --color-surface-strong: var(--surface-strong);
+  --color-surface-bg: var(--bg);
+  --color-dark-bg: var(--dark-bg);
+  --color-dark-surface: var(--dark-surface);
+  --color-dark-soft: var(--dark-soft);
 }
 
 :root {
@@ -36,8 +34,14 @@
   --brand-strong: #1d4ed8;
   --brand-light: #eff6ff;
   --accent: #10b981;
+  --accent-strong: #059669;
   --danger: #ef4444;
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+
+  /* Dark theme palette variables (used by @theme via var()) */
+  --dark-bg: #0b0f1a;
+  --dark-surface: #151b2d;
+  --dark-soft: #1e2641;
 
   /* Sidebar Light Theme - Derived from logo blue */
   --sidebar-bg: #fdfdfd;
@@ -65,8 +69,14 @@
   --brand-strong: #3b82f6;
   --brand-light: rgba(96, 165, 250, 0.1);
   --accent: #34d399;
+  --accent-strong: #10b981;
   --danger: #f87171;
   --shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+
+  /* Dark theme palette variables (used by @theme via var()) */
+  --dark-bg: #0b0f1a;
+  --dark-surface: #151b2d;
+  --dark-soft: #1e2641;
 
   /* Sidebar Dark Theme - Deep brand navy */
   --sidebar-bg: #0f172a;
@@ -199,6 +209,77 @@
 
   .btn-secondary:hover:not(:disabled) {
     background-color: var(--surface-strong);
+  }
+
+  /* Modal styles (used by Modal component via createPortal) */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+  }
+
+  .modal-content {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 1.5rem;
+    box-shadow: var(--shadow-premium-hover);
+    max-width: 42rem;
+    width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background-color: var(--surface-soft);
+  }
+
+  .modal-header h2 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.125rem;
+    color: var(--text);
+    margin: 0;
+  }
+
+  .modal-close-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.75rem;
+    background-color: var(--surface-soft);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .modal-close-button:hover {
+    background-color: var(--danger);
+    color: white;
+    border-color: var(--danger);
+  }
+
+  .modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    color: var(--text);
   }
 }
 
