@@ -10,22 +10,10 @@ function resolveDefaultApiBase() {
     return "http://localhost:8000";
   }
 
-  // Production on Railway
-  if (hostname.endsWith("railway.app")) {
-    return "https://sales-backend.up.railway.app";
-  }
-
-  // GitHub Pages deployment
-  if (hostname.endsWith("github.io")) {
-    return "https://norbzck.github.io";
-  }
-
-  // Fallbacks for other platforms (keep for now)
-  if (protocol === "https:" && hostname.endsWith("netlify.app")) {
-    return "https://sales-analysis-api.onrender.com";
-  }
-  if (protocol === "https:" && hostname.endsWith("vercel.app")) {
-    return "https://sales-analysis-api.onrender.com";
+  // On a custom domain or deployed frontend — use the same origin
+  // so the API is served from the same host as the frontend
+  if (protocol === "https:") {
+    return origin.replace(/\/+$/, "");
   }
 
   return origin.replace(/\/+$/, "");

@@ -133,7 +133,9 @@ def _parse_cors_origins() -> list[str]:
     raw = os.environ.get("CORS_ORIGINS", "")
     origins = [o.strip() for o in raw.split(",") if o.strip()]
     if not origins:
-        origins = ["http://127.0.0.1:5500", "http://localhost:5173"]
+        origins = [origin.replace("+origin", "") for origin in [os.environ.get("FRONTEND_URL", "")] if origin]
+        if not origins:
+            origins = ["http://127.0.0.1:5500", "http://localhost:5173"]
     return origins
 
 
