@@ -58,8 +58,8 @@ Vite
 
 ## Setup & Installation
 1: Clone the repository
-git clone "https://github.com/norbzCk/sales_analysis.git"
-cd sales-dashboard
+git clone "https://github.com/norbzCk/norbzCk.github.io.git"
+cd norbzCk.github.io
 
 2: Create a virtual environment
 python3 -m venv venv

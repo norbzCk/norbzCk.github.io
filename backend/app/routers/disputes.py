@@ -6,7 +6,6 @@ from backend.database import get_db
 from backend.app.auth import get_current_user, require_roles
 from backend.app.schemas.dispute import Dispute, DisputeCreate, DisputeUpdate, DisputeInDB
 from backend.models import Dispute as DisputeModel, Sale, User
-from backend.app.notification_service import create_notification, resolve_subject
 
 router = APIRouter(prefix="/disputes", tags=["Disputes"])
 

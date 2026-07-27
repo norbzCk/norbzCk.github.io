@@ -15,6 +15,11 @@ function resolveDefaultApiBase() {
     return "https://sales-backend.up.railway.app";
   }
 
+  // GitHub Pages deployment
+  if (hostname.endsWith("github.io")) {
+    return "https://norbzck.github.io";
+  }
+
   // Fallbacks for other platforms (keep for now)
   if (protocol === "https:" && hostname.endsWith("netlify.app")) {
     return "https://sales-analysis-api.onrender.com";

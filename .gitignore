@@ -2,7 +2,6 @@
 # Node / React / Vite
 # ----------------------
 node_modules/
-dist/
 build/
 .vite/
 *.tsbuildinfo
@@ -43,17 +42,11 @@ Thumbs.db
 # Uploads / generated files
 # ----------------------
 uploads/
-*.lognode_modules/
-dist/
-build/
-__pycache__/
-*.pyc
-.env
-venv/
-.venv/
-uploads/
+*.log
 .aider*
 
+# ----------------------
+# Frontend build (commit for GitHub Pages)
+# ----------------------
 !frontend-react/dist/
 !frontend-react/dist/**
-frontend-react/dist/

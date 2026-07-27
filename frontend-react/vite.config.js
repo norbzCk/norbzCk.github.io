@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
     plugins: [react()],
     build: {
-        crossorigin: false, // Disable crossorigin attributes to avoid CORS blocking when served from FastAPI
+        crossorigin: "anonymous",
     },
     server: {
         port: 5173,
