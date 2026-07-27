@@ -1,0 +1,27 @@
+{
+  "short_name": "SokoLnk",
+  "name": "SokoLnk - Premium Marketplace",
+  "description": "Connecting buyers, sellers, and delivery partners in Tanzania",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "lang": "en",
+  "dir": "ltr",
+  "scope": "/",
+  "categories": ["business", "shopping", "marketplace"],
+  "prefer_related_applications": false
+}
