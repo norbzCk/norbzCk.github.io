@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, Response, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ from backend.app.schemas import (
     LogisticsRegister, LogisticsLogin, LogisticsProfile,
     DeliveryOrderCreate, DeliveryOrderResponse, DeliveryStatusUpdate
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, decode_token, _normalize_phone, _phone_matches, get_current_user, security
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security
 from backend.app.business import get_current_business_user
 from backend.app.notification_service import build_login_email, create_notification, resolve_subject
 from backend.app.order_runtime import ensure_order_thread, log_order_status, record_audit, record_shipment_event, update_reservation_status
@@ -145,6 +145,7 @@ def get_current_logistics_user(
 def register_logistics(
     payload: LogisticsRegister,
     background_tasks: BackgroundTasks,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     existing = _get_logistics_user(db, payload.phone)
@@ -196,10 +197,14 @@ def register_logistics(
         "phone": user.phone,
         "user_type": "logistics"
     })
+    refresh_token = create_refresh_token(user.id, "logistics", db)
+    set_auth_cookies(response, token, refresh_token)
     
     return {
         "message": "Logistics account created successfully",
-        "token": token,
+        "access_token": token,
+        "token_type": "bearer",
+        "userType": "logistics",
         "user": _serialize_logistics(user)
     }
 

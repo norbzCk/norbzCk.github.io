@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, date
 import os
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, Response, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -28,7 +28,7 @@ from backend.app.schemas import (
     BusinessRegister, BusinessLogin, BusinessProfile,
     BusinessUpdate, BusinessVerificationSubmit
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, decode_token, _normalize_phone, _phone_matches, get_current_user, security
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security
 from backend.app.notification_service import build_login_email, create_notification, list_notifications_for_subject, resolve_subject, serialize_notification
 from backend.app.order_runtime import (
     ensure_order_thread,
@@ -301,6 +301,7 @@ def _get_business_user(db: Session, phone: str = None, email: str = None):
 def register_business(
     payload: BusinessRegister,
     background_tasks: BackgroundTasks,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     existing = _get_business_user(db, payload.phone)
@@ -359,10 +360,14 @@ def register_business(
         "role": user.role,
         "user_type": "business"
     })
+    refresh_token = create_refresh_token(user.id, "business", db)
+    set_auth_cookies(response, token, refresh_token)
     
     return {
         "message": "Business account created successfully",
-        "token": token,
+        "access_token": token,
+        "token_type": "bearer",
+        "userType": "business",
         "user": _serialize_business(user)
     }
 

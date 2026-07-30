@@ -106,11 +106,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function register(payload: RegisterPayload) {
-    await apiRequest("/auth/register", {
+    const data = await apiRequest<{ access_token?: string; user?: SessionUser; userType?: UserType }>("/auth/register", {
       method: "POST",
       auth: false,
       body: payload,
     });
+
+    const token = data.access_token;
+    const merged = normalizeUser({ ...(data.user || {}), role: data.user?.role }, data.userType);
+
+    if (!token || !merged) {
+      throw new Error("Invalid registration response");
+    }
+
+    const sessionType = merged.role === "super_admin" ? "superadmin" : (data.userType || "user");
+    persistSession(token, merged, sessionType);
+    setUser(merged);
+    setToken(token);
   }
 
   async function logout() {

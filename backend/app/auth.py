@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import hmac
 import json
@@ -109,6 +108,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    if "sub" in to_encode and not isinstance(to_encode["sub"], str):
+        to_encode["sub"] = str(to_encode["sub"])
     to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "jti": str(uuid.uuid4())})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -334,18 +335,10 @@ def get_optional_current_user(
         return None
 
 
-def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
-) -> User | BusinessUser | LogisticsUser:
-    user = get_optional_current_user(request, credentials, db)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
-
-
-def get_user_from_token(token: str, db: Session | None = None) -> User | BusinessUser | LogisticsUser | None:
+def get_user_from_token(
+    token: str,
+    db: Session | None = None,
+) -> User | BusinessUser | LogisticsUser | None:
     """Extract user from JWT token without requiring FastAPI dependencies"""
     if db is None:
         from backend.database import SessionLocal
@@ -486,6 +479,7 @@ def register(
     request: Request,
     payload: dict,
     background_tasks: BackgroundTasks,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     name = (payload.get("name") or "").strip()
@@ -537,12 +531,21 @@ def register(
     )
     db.commit()
 
+    token = create_access_token({"sub": model.id, "role": "user", "email": model.email, "user_type": "user"})
+    refresh_token = create_refresh_token(model.id, "user", db)
+    set_auth_cookies(response, token, refresh_token)
+
     return {
-        "id": model.id,
-        "name": model.name,
-        "email": model.email,
-        "role": model.role,
-        "is_verified": model.is_verified,
+        "access_token": token,
+        "token_type": "bearer",
+        "userType": "user",
+        "user": {
+            "id": model.id,
+            "name": model.name,
+            "email": model.email,
+            "role": "user",
+            "is_verified": model.is_verified,
+        },
     }
 
 
@@ -569,15 +572,21 @@ def register_customer(
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already registered")
     
+    normalized_email = email or f"{phone}@phone.local"
+    existing_email = db.query(User).filter(func.lower(User.email) == normalized_email.lower()).first()
+    if existing_email:
+        normalized_email = f"{phone}+{secrets.token_hex(3)}@phone.local"
+    
     verification_token = secrets.token_urlsafe(32)
     model = User(
         name=name,
-        email=email,
+        email=normalized_email,
         phone=phone,
         address=location,
         profile_photo=(payload.get("profile_photo") or "").strip() or None,
         password_hash=hash_password(password),
         role="user",
+        is_active=True,
         is_verified=False,
         verification_token=verification_token,
     )
@@ -724,6 +733,7 @@ def login(
     return {
         "access_token": token,
         "token_type": "bearer",
+        "userType": user_type,
         "user": {
             "id": user.id,
             "name": getattr(user, "name", getattr(user, "business_name", "User")),
