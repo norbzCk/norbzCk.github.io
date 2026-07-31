@@ -10,6 +10,16 @@ function resolveDefaultApiBase() {
     return "http://localhost:8000";
   }
 
+  // GitHub Pages — API is on Railway
+  if (hostname.endsWith("github.io")) {
+    return "https://sales-backend.up.railway.app";
+  }
+
+  // Railway — API on the same Railway app
+  if (hostname.endsWith("railway.app")) {
+    return "https://sales-backend.up.railway.app";
+  }
+
   // On a custom domain or deployed frontend — use the same origin
   // so the API is served from the same host as the frontend
   if (protocol === "https:") {

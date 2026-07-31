@@ -1,6 +1,35 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  /* Colors are defined as CSS variable references so that dark mode
+     (via [data-theme="dark"]) automatically switches values at runtime. */
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-light: var(--brand-light);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-danger: var(--danger);
+  --color-surface: var(--surface);
+  --color-surface-soft: var(--surface-soft);
+  --color-surface-strong: var(--surface-strong);
+  --color-surface-bg: var(--bg);
+  --color-dark-bg: var(--dark-bg);
+  --color-dark-surface: var(--dark-surface);
+  --color-dark-soft: var(--dark-soft);
+
+  /* Fonts */
+  --font-display: "Sora", sans-serif;
+  --font-sans: "Inter", sans-serif;
+
+  /* Dark mode: use [data-theme="dark"] selector instead of prefers-color-scheme */
+  --tw-dark-mode: selector;
+  --tw-dark-mode-selector: '[data-theme="dark"]';
+}
+
 
 :root {
   --bg: #f8fafc;
@@ -8,7 +37,7 @@
   --surface-soft: #f1f5f9;
   --surface-strong: #e2e8f0;
   --text: #0f172a;
-  --text-muted: #475569;
+  --text-muted: #475569; /* Darker for better contrast in light mode */
   --border: #e2e8f0;
   --brand: #3b82f6;
   --brand-strong: #1d4ed8;
@@ -18,10 +47,12 @@
   --danger: #ef4444;
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
 
+  /* Dark theme palette variables (used by @theme via var()) */
   --dark-bg: #0b0f1a;
   --dark-surface: #151b2d;
   --dark-soft: #1e2641;
 
+  /* Sidebar Light Theme - Derived from logo blue */
   --sidebar-bg: #fdfdfd;
   --sidebar-text: #0f172a;
   --sidebar-text-muted: #64748b;
@@ -31,9 +62,6 @@
 
   --glass-bg: rgba(255, 255, 255, 0.85);
   --glass-border: rgba(226, 232, 240, 0.8);
-
-  --shadow-premium: 0 10px 30px rgba(0, 0, 0, 0.08);
-  --shadow-premium-hover: 0 20px 40px rgba(0, 0, 0, 0.12);
 
   color-scheme: light;
 }
@@ -54,10 +82,12 @@
   --danger: #f87171;
   --shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
 
+  /* Dark theme palette variables (used by @theme via var()) */
   --dark-bg: #0b0f1a;
   --dark-surface: #151b2d;
   --dark-soft: #1e2641;
 
+  /* Sidebar Dark Theme - Deep brand navy */
   --sidebar-bg: #0f172a;
   --sidebar-text: #f1f5f9;
   --sidebar-text-muted: #64748b;
@@ -67,9 +97,6 @@
 
   --glass-bg: rgba(21, 27, 45, 0.85);
   --glass-border: rgba(30, 41, 59, 0.8);
-
-  --shadow-premium: 0 10px 30px rgba(0, 0, 0, 0.25);
-  --shadow-premium-hover: 0 20px 40px rgba(0, 0, 0, 0.4);
 
   color-scheme: dark;
 }
@@ -194,6 +221,7 @@
     background-color: var(--surface-strong);
   }
 
+  /* Modal styles (used by Modal component via createPortal) */
   .modal-overlay {
     position: fixed;
     inset: 0;
@@ -273,7 +301,7 @@
     background-color: var(--bg);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
-    font-size: 0.9375rem;
+    font-size: 0.9375rem; /* Reduced global scale */
     transition: background-color 0.3s, color 0.3s;
   }
 
@@ -284,6 +312,10 @@
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+@utility animate-marquee {
+  animation: marquee 40s linear infinite;
+}
 
 @keyframes marquee {
   0% { transform: translateX(0); }

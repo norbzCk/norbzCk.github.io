@@ -33,7 +33,7 @@ services:
       - key: APP_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        sync: false
+        value: "*"
 
 databases:
   - name: sales-db

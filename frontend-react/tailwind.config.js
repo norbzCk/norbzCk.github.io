@@ -37,7 +37,6 @@ export default {
       animation: {
         'soft-enter': 'page-soft-enter 420ms ease both',
         'pulse-btn': 'pulse-btn 2s infinite',
-        'marquee': 'marquee 40s linear infinite',
       },
       keyframes: {
         'page-soft-enter': {
@@ -47,10 +46,6 @@ export default {
         'pulse-btn': {
           '0%, 100%': { boxShadow: '0 4px 16px rgba(15, 90, 166, 0.3)' },
           '50%': { boxShadow: '0 4px 24px rgba(15, 90, 166, 0.5)' },
-        },
-        marquee: {
-          '0%': { transform: 'translateX(0)' },
-          '100%': { transform: 'translateX(-50%)' },
         },
       },
     },

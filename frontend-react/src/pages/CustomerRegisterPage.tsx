@@ -2,6 +2,8 @@ import { FormEvent, useState } from "react";
 import { AuthScene } from "../components/AuthScene";
 import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/http";
+import { persistSession } from "../features/auth/authStorage";
+import type { SessionUser } from "../types/auth";
 
 export function CustomerRegisterPage() {
   const navigate = useNavigate();
@@ -24,13 +26,16 @@ export function CustomerRegisterPage() {
     };
 
     try {
-      await apiRequest("/auth/register-customer", {
+      const data = await apiRequest<{ access_token?: string; user?: SessionUser; userType?: string }>("/auth/register-customer", {
         method: "POST",
         auth: false,
         body: payload,
       });
+      if (data.access_token && data.user) {
+        persistSession(data.access_token, data.user, data.userType || "user");
+      }
       setSuccess("Customer registered successfully.");
-      setTimeout(() => navigate("/login"), 900);
+      setTimeout(() => navigate("/app/customer"), 900);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {

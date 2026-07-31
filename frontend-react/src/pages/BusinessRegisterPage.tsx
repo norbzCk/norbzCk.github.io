@@ -36,14 +36,14 @@ export function BusinessRegisterPage() {
     };
 
     try {
-      const data = await apiRequest<{ token?: string; user?: SessionUser }>("/business/register", {
+      const data = await apiRequest<{ access_token?: string; user?: SessionUser }>("/business/register", {
         method: "POST",
         auth: false,
         body: payload,
       });
       setSuccess("Business registered successfully.");
-      if (data.token && data.user) {
-        persistSession(data.token, data.user, "business");
+      if (data.access_token && data.user) {
+        persistSession(data.access_token, data.user, "business");
       }
       setTimeout(() => {
         window.location.href = "/app/seller";

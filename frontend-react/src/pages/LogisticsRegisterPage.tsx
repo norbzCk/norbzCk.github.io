@@ -30,13 +30,13 @@ export function LogisticsRegisterPage() {
     };
 
     try {
-      const data = await apiRequest<{ token?: string; user?: SessionUser }>("/logistics/register", {
+      const data = await apiRequest<{ access_token?: string; user?: SessionUser }>("/logistics/register", {
         method: "POST",
         auth: false,
         body: payload,
       });
-      if (data.token && data.user) {
-        persistSession(data.token, { ...data.user, role: "logistics" }, "logistics");
+      if (data.access_token && data.user) {
+        persistSession(data.access_token, { ...data.user, role: "logistics" }, "logistics");
       }
       setSuccess("Logistics account registered successfully.");
       setTimeout(() => {
