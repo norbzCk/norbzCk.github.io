@@ -1,4 +1,4 @@
-# Sales Dashboard Web Application
+# Soko-Link
 
 A full-stack sales analytics dashboard that visualizes revenue, orders, units sold, and product performance using a FastAPI backend. The repository now contains both the original lightweight HTML/CSS/JavaScript frontend and a new React + TypeScript frontend architecture for incremental migration.
 
