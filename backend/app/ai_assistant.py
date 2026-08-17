@@ -693,7 +693,7 @@ def assistant_reply(
             db.flush()
             pass
 
-    reply = _fallback_reply(payload.message, area, user_context, market_context, tool_context)
+    reply = get_ai_reply(payload.message, user_context, market_context, tool_context, area)
     _store_message(db, conversation.id, "assistant", reply, source="fallback", model="support-policy-fallback")
     db.commit()
     return AssistantResponse(

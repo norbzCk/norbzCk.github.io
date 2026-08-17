@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from backend.models import Sale, Product, Provider, Customer
+from backend.models import Sale, Product, Provider, Customer, User
 
 def calculate_inventory_forecast(db: Session, seller_id: int):
     # Calculate days of stock left based on recent sales (burn rate)

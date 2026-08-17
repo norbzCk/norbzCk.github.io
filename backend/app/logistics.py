@@ -942,35 +942,6 @@ def get_available_logistics(
     }
 
 
-@router.get("/{logistics_id}")
-def get_logistics_public_profile(
-    logistics_id: int,
-    db: Session = Depends(get_db)
-):
-    user = db.query(LogisticsUser).filter(LogisticsUser.id == logistics_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Logistics provider not found")
-    
-    metrics = db.query(LogisticsMetrics).filter(LogisticsMetrics.logistics_id == logistics_id).first()
-    
-    return {
-        "id": user.id,
-        "name": user.name,
-        "account_type": user.account_type,
-        "vehicle_type": user.vehicle_type,
-        "plate_number": user.plate_number,
-        "base_area": user.base_area,
-        "coverage_areas": user.coverage_areas,
-        "verification_status": user.verification_status,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "metrics": {
-            "rating": metrics.rating if metrics else 0,
-            "total_deliveries": metrics.total_deliveries if metrics else 0,
-         "success_rate": metrics.success_rate if metrics else 0
-         } if metrics else {"rating": 0, "total_deliveries": 0, "success_rate": 0}
-     }
-
-
 @router.get("/track")
 def public_track_delivery(
     order_id: Optional[str] = None,
@@ -1003,6 +974,37 @@ def public_track_delivery(
     logistics = db.query(LogisticsUser).filter(LogisticsUser.id == delivery.logistics_id).first() if delivery.logistics_id else None
     
     return build_tracking_payload(delivery, order, logistics)
+
+
+
+@router.get("/{logistics_id}")
+def get_logistics_public_profile(
+    logistics_id: int,
+    db: Session = Depends(get_db)
+):
+    user = db.query(LogisticsUser).filter(LogisticsUser.id == logistics_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Logistics provider not found")
+    
+    metrics = db.query(LogisticsMetrics).filter(LogisticsMetrics.logistics_id == logistics_id).first()
+    
+    return {
+        "id": user.id,
+        "name": user.name,
+        "account_type": user.account_type,
+        "vehicle_type": user.vehicle_type,
+        "plate_number": user.plate_number,
+        "base_area": user.base_area,
+        "coverage_areas": user.coverage_areas,
+        "verification_status": user.verification_status,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "metrics": {
+            "rating": metrics.rating if metrics else 0,
+            "total_deliveries": metrics.total_deliveries if metrics else 0,
+         "success_rate": metrics.success_rate if metrics else 0
+         } if metrics else {"rating": 0, "total_deliveries": 0, "success_rate": 0}
+     }
+
 
 
 @router.post("/deliveries/{delivery_id}/rating")

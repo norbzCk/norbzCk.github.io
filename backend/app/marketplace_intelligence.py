@@ -511,12 +511,12 @@ def build_marketplace_trends(db: Session) -> dict[str, Any]:
 
     trend_items = [
         {
-            "label": str(row.category or "").strip(),
+            "label": str(category_key or "").strip(),
             "trend": format_trend(float(row["recent_qty"]) + float(row["rfq_qty"]), float(row["previous_qty"]) + float(row["previous_rfq_qty"])),
             "status": trend_status(row),
             "_score": trend_score(row),
         }
-        for row in category_metrics.values()
+        for category_key, row in category_metrics.items()
         if row.get("recent_qty") or row.get("recent_orders") or row.get("rfq_count") or row.get("rfq_qty")
     ]
     trend_items.sort(key=lambda item: float(item["_score"]), reverse=True)

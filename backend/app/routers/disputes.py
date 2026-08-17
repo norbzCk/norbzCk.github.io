@@ -96,6 +96,11 @@ def update_dispute(
         raise HTTPException(status_code=404, detail="Dispute not found")
     
     update_data = dispute_update.dict(exclude_unset=True)
+    
+    valid_statuses = {"open", "resolved_seller", "resolved_buyer", "resolved_mutual", "arbitration", "escalated"}
+    if "status" in update_data and update_data["status"] not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid dispute status: {update_data['status']}")
+    
     for key, value in update_data.items():
         setattr(dispute, key, value)
     

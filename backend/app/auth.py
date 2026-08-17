@@ -496,11 +496,17 @@ def register(
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
 
+    phone = (payload.get("phone") or "").strip() or None
+    if phone:
+        existing_phone = db.query(User).filter(User.phone == phone).first()
+        if existing_phone:
+            raise HTTPException(status_code=400, detail="Phone number already registered")
+
     verification_token = secrets.token_urlsafe(32)
     model = User(
         name=name,
         email=email,
-        phone=(payload.get("phone") or "").strip() or None,
+        phone=phone,
         address=(payload.get("address") or "").strip() or None,
         profile_photo=(payload.get("profile_photo") or "").strip() or None,
         password_hash=hash_password(password),
@@ -519,14 +525,14 @@ def register(
         recipient_type=recipient_type,
         recipient_id=recipient_id,
         recipient_email=recipient_email,
-        title="Welcome to SokoLnk",
+        title="Welcome to Soko-Link",
         message="Please verify your email to complete registration.",
         notification_type="system",
         severity="success",
         action_href=f"/verify-email?token={verification_token}",
         send_email=bool(recipient_email),
-        email_subject="Verify your SokoLnk account",
-        email_body=f"Hello {recipient_name},\n\nWelcome to SokoLnk. Please click the link below to verify your email:\n\n{verification_token}\n\nSokoLnk Team",
+        email_subject="Verify your Soko-Link account",
+        email_body=f"Hello {recipient_name},\n\nWelcome to Soko-Link. Please click the link below to verify your email:\n\n{verification_token}\n\nSoko-Link Team",
         background_tasks=background_tasks,
     )
     db.commit()
@@ -697,7 +703,10 @@ def login(
     if not user or not verify_and_upgrade_password(password, user):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    role = _normalize_role(user.role)
+    role = getattr(user, "role", None)
+    if role is None:
+        role = "logistics" if isinstance(user, LogisticsUser) else "user"
+    role = _normalize_role(role)
     user.role = role
     
     recipient_type, recipient_id, recipient_email, recipient_name = resolve_subject(user)

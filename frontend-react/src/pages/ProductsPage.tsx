@@ -125,7 +125,7 @@ export function ProductsPage() {
 
   useEffect(() => {
     void load();
-  }, [sellerMode]);
+  }, [sellerMode, adminMode, user?.role, user?.id]);
 
   useEffect(() => {
     setSearch(searchParams.get("q") || searchParams.get("seller") || "");
@@ -136,22 +136,47 @@ export function ProductsPage() {
     setLoading(true);
     setError("");
     try {
+      const productPromise = apiRequest<{ items: Product[] } | Product[]>("/products/marketplace")
+        .then((data) => (Array.isArray(data) ? { items: data as Product[] } : (data as { items?: Product[] })))
+        .catch(() =>
+          apiRequest<Product[] | { items: Product[] }>("/products/public")
+            .then((data) => (Array.isArray(data) ? { items: data as Product[] } : (data as { items?: Product[] })))
+            .catch(() => ({ items: [] as Product[] })),
+        );
+
+      const providerPromise = canManage(user?.role)
+        ? apiRequest<Provider[]>("/providers/").catch(() => [])
+        : Promise.resolve<Provider[]>([]);
+
+      const inventoryPromise = !adminMode && !sellerMode
+        ? Promise.resolve<InventoryStats | null>(null)
+        : apiRequest<InventoryStats>("/products/inventory/stats").catch(() => null);
+
+      const forecastPromise = sellerMode
+        ? apiRequest<{ items: InventoryForecastItem[] }>("/business/inventory/forecast").catch(() => ({ items: [] as InventoryForecastItem[] }))
+        : Promise.resolve<{ items: InventoryForecastItem[] }>({ items: [] });
+
       const [productData, providerData, inventoryData, forecastData] = await Promise.all([
-        apiRequest<{ items: Product[] }>("/products/marketplace"),
-        apiRequest<Provider[]>("/providers/"),
-        !adminMode && !sellerMode ? Promise.resolve(null) : apiRequest<InventoryStats>("/products/inventory/stats"),
-        sellerMode ? apiRequest<{ items: InventoryForecastItem[] }>("/business/inventory/forecast") : Promise.resolve(null),
+        productPromise,
+        providerPromise,
+        inventoryPromise,
+        forecastPromise,
       ]);
-      setProducts(productData.items || []);
-      setProviders(providerData);
+      setProducts(productData?.items || []);
+      setProviders(Array.isArray(providerData) ? providerData : []);
       setInventory(inventoryData);
       setForecast(forecastData?.items || []);
 
       if (adminMode) {
-        const sellers = await apiRequest<{ items: BusinessmanOption[] }>("/business/");
-        setBusinessmen(sellers.items || []);
+        try {
+          const sellers = await apiRequest<{ items: BusinessmanOption[] }>("/business/");
+          setBusinessmen(sellers.items || []);
+        } catch {
+          setBusinessmen([]);
+        }
       }
     } catch (err) {
+      setProducts([]);
       setError(err instanceof Error ? err.message : "Failed to load products");
     } finally {
       setLoading(false);
@@ -318,6 +343,36 @@ export function ProductsPage() {
 
   return (
     <div className="space-y-10 max-w-7xl mx-auto">
+      <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-slate-950 via-slate-900 to-brand/80 p-8 text-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.55)]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(255,255,255,0.18),_transparent_42%)]" />
+        <div className="relative z-10 flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl space-y-4">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.3em] text-white/80 backdrop-blur">
+              <Sparkles size={12} /> Curated marketplace
+            </div>
+            <div className="space-y-3">
+              <h1 className="text-3xl font-display font-black tracking-tight sm:text-4xl">
+                Discover premium listings with a calmer, more elegant buying experience.
+              </h1>
+              <p className="max-w-xl text-sm leading-7 text-slate-200 sm:text-base">
+                Browse trusted products, compare standout offers, and move from discovery to checkout with confidence.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              { label: "Live listings", value: products.length },
+              { label: "Visible now", value: visibleProducts.length },
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur">
+                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/60">{item.label}</p>
+                <p className="mt-1 text-2xl font-display font-black">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Inventory Stats Grid */}
       {inventory ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -643,24 +698,25 @@ export function ProductsPage() {
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  className="glass-card overflow-hidden group flex flex-col h-full hover:border-brand/30 transition-all duration-300"
+                  className="group flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/70 bg-white/90 shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25)] backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-brand/30 hover:shadow-[0_28px_70px_-20px_rgba(59,130,246,0.35)]"
                 >
                   <div 
-                    className="relative aspect-[4/5] overflow-hidden bg-surface-soft cursor-pointer" 
+                    className="relative aspect-[4/5] cursor-pointer overflow-hidden bg-surface-soft" 
                     onClick={() => navigate(`/product/${product.id}`)}
                   >
                     <img
                       src={resolveImageUrl(product.image_url)}
                       alt={product.name}
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                      className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
                       loading="lazy"
                     />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/10 to-transparent" />
                     <div className="absolute top-4 left-4 flex flex-col gap-2">
-                      <span className="px-3 py-1 bg-white/90 backdrop-blur-md rounded-full text-[10px] font-black uppercase tracking-widest text-text shadow-sm border border-white/50">
+                      <span className="rounded-full border border-white/50 bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text shadow-sm backdrop-blur-md">
                         {product.category || "General"}
                       </span>
                       {product.stock && product.stock <= 5 && (
-                        <span className="px-3 py-1 bg-danger/90 backdrop-blur-md rounded-full text-[10px] font-black uppercase tracking-widest text-white shadow-sm flex items-center gap-1.5">
+                        <span className="flex items-center gap-1.5 rounded-full bg-danger/90 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm backdrop-blur-md">
                           <AlertTriangle size={12} /> Low Stock
                         </span>
                       )}
@@ -683,13 +739,13 @@ export function ProductsPage() {
                     )}
                   </div>
 
-                  <div className="p-6 flex flex-col flex-1 gap-6">
+                  <div className="flex flex-1 flex-col gap-6 p-6">
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">
                         <Store size={14} className="text-text-muted" />
-                        <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest truncate">{product.seller_name || "Independent Seller"}</span>
+                        <span className="truncate text-[10px] font-bold uppercase tracking-widest text-text-muted">{product.seller_name || "Independent Seller"}</span>
                       </div>
-                      <h3 className="font-display font-bold text-lg text-text leading-tight group-hover:text-brand transition-colors line-clamp-2 cursor-pointer" onClick={() => navigate(`/product/${product.id}`)}>
+                      <h3 className="cursor-pointer font-display text-lg font-bold leading-tight text-text transition-colors line-clamp-2 group-hover:text-brand" onClick={() => navigate(`/product/${product.id}`)}>
                         {product.name}
                       </h3>
                     </div>
@@ -713,7 +769,7 @@ export function ProductsPage() {
                           setIsOpen(true);
                         }}
                         disabled={!(product.stock && product.stock > 0)}
-                        className="h-12 px-5 bg-text dark:bg-brand text-white rounded-xl flex items-center gap-2 font-black text-xs uppercase tracking-widest hover:bg-brand active:scale-95 transition-all disabled:opacity-30 disabled:grayscale"
+                        className="h-12 px-5 rounded-xl bg-gradient-to-r from-slate-900 to-brand text-white flex items-center gap-2 font-black text-xs uppercase tracking-widest shadow-lg shadow-brand/20 hover:shadow-brand/30 active:scale-95 transition-all disabled:cursor-not-allowed disabled:opacity-35"
                       >
                         <Plus size={18} />
                         {product.stock && product.stock > 0 ? "Add to Cart" : "Out of Stock"}
