@@ -17,7 +17,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.sqlite3
+*.sqlitegit rm --cached sokolink.db3
 
 # Virtual environments
 venv/
@@ -49,4 +49,4 @@ uploads/
 # Frontend build (commit for GitHub Pages)
 # ----------------------
 !frontend-react/dist/
-!frontend-react/dist/**
+!frontend-react/dist/***.db
