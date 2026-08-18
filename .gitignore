@@ -50,3 +50,4 @@ uploads/
 # ----------------------
 !frontend-react/dist/
 !frontend-react/dist/***.db
+supabase_schema.sql

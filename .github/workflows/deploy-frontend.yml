@@ -33,8 +33,8 @@ jobs:
         working-directory: frontend-react
         env:
           VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: https://jjryzuwfzneyxtkkjejd.supabase.co
+          VITE_SUPABASE_ANON_KEY: sb_publishable_i3sqYYX9aT1ftZ98JuHXdg_Wr-jaNbE
         run: npm run build
 
       - name: Configure Pages

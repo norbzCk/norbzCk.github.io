@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs clean dev frontend backend supabase-push supabase-pull supabase-migrate
+.PHONY: help build up down restart logs clean dev frontend backend supabase-push supabase-pull supabase-migrate supabase-schema
 
 VENV = /home/norbs-ck/sales_project/venv/bin
 
@@ -13,6 +13,7 @@ help:
 	@echo "  make dev              - Start backend + frontend locally (no Docker)"
 	@echo "  make backend          - Start only the FastAPI backend locally"
 	@echo "  make frontend         - Start only the Vite frontend locally"
+	@echo "  make supabase-schema  - Export SQL schema for Supabase"
 	@echo "  make supabase-push    - Sync local DB -> Supabase"
 	@echo "  make supabase-pull    - Sync Supabase -> local DB"
 	@echo "  make supabase-migrate - Run Alembic migrations against Supabase"
@@ -51,3 +52,6 @@ supabase-pull:
 
 supabase-migrate:
 	$(VENV)/alembic upgrade head
+
+supabase-schema:
+	$(VENV)/python -m backend.generate_sql_schema supabase_schema.sql

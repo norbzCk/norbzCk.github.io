@@ -21,6 +21,7 @@ def resolve_database_url() -> str:
     if database_url:
         if database_url.startswith("postgres://"):
             database_url = "postgresql://" + database_url[len("postgres://"):]
+        database_url = _fix_password_encoding(database_url)
         return _ensure_ssl_mode(database_url)
 
     render_env = os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL")
@@ -49,6 +50,52 @@ def _ensure_ssl_mode(url: str) -> str:
     query = parsed.query + ("&sslmode=require" if parsed.query else "sslmode=require")
     parsed = parsed._replace(query=query)
     return urlunparse(parsed)
+
+
+def _fix_password_encoding(url: str) -> str:
+    """Fix connection strings where the password contains unencoded special
+    characters (``#``, ``@``, etc.).
+
+    This often happens with Supabase pooled connection strings where the
+    password contains characters that have special meaning in URIs.  For
+    example, ``4444#norbie1234567890`` will be split at the ``#`` by
+    ``urlparse`` — everything after ``#`` becomes the URL fragment and the
+    hostname appears empty.
+    """
+    parsed = urlparse(url)
+
+    # If urlparse found a real hostname (with @ in netloc), URL is fine
+    if "@" in (parsed.netloc or ""):
+        return url
+
+    # If the fragment contains @ and a hostname:port, the password had an
+    # unencoded # (or @) that caused urlparse to misparse the URL.
+    # Re-encode the password by splitting on the last @ in the full URL.
+    if parsed.fragment and "@" in parsed.fragment:
+        scheme_end = url.find("://")
+        if scheme_end == -1:
+            return url
+        scheme = url[:scheme_end]
+        rest = url[scheme_end + 3:]
+
+        at_index = rest.rfind("@")
+        if at_index == -1:
+            return url
+
+        userinfo = rest[:at_index]
+        hostinfo = rest[at_index + 1:]
+
+        colon_index = userinfo.find(":")
+        if colon_index == -1:
+            return url  # no password, nothing to fix
+
+        user = userinfo[:colon_index]
+        password = userinfo[colon_index + 1:]
+
+        encoded_password = quote_plus(password)
+        return f"{scheme}://{user}:{encoded_password}@{hostinfo}"
+
+    return url
 
 
 DATABASE_URL = resolve_database_url()

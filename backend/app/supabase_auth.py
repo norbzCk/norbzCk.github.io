@@ -40,13 +40,17 @@ def _get_supabase_url() -> str:
 
 
 def _get_jwks_url() -> str:
+    # Allow explicit override (some Supabase projects use .jwks.json)
+    jwks_url = os.getenv("SUPABASE_JWKS_URL", "").strip()
+    if jwks_url:
+        return jwks_url
     return f"{_get_supabase_url()}/auth/v1/.well-known/jwks"
 
 
 @lru_cache(maxsize=1)
 def _get_jwk_client() -> PyJWKClient:
     jwks_url = _get_jwks_url()
-    return PyJWKClient(jwks_url, cache_keys=True, cache_jwk=True)
+    return PyJWKClient(jwks_url, cache_keys=True, cache_jwk_set=True)
 
 
 def verify_supabase_token(token: str) -> dict:

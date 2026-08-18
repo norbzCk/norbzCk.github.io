@@ -99,7 +99,14 @@ def _ensure_schema_columns():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup — create all tables first, then patch any missing columns
-    Base.metadata.create_all(bind=engine)
+    # For remote databases (e.g. Supabase), skip create_all — it's slow over
+    # the network and Alembic migrations manage the schema.  The
+    # _ensure_schema_columns() safety-net still runs to patch any drift.
+    is_remote = engine.url.drivername == "postgresql" and engine.url.host not in (
+        "localhost", "127.0.0.1", "0.0.0.0", "::1"
+    )
+    if not is_remote:
+        Base.metadata.create_all(bind=engine)
     _ensure_schema_columns()
     # Seed demo data and ensure there are sample sales for analytics
     db = SessionLocal()
@@ -139,18 +146,23 @@ def _parse_cors_origins() -> list[str]:
     origins = [o.strip() for o in raw.split(",") if o.strip()]
     if not origins:
         origins = [origin.replace("+origin", "") for origin in [os.environ.get("FRONTEND_URL", "")] if origin]
-        if not origins:
-            origins = ["*"]
     return origins
 
 
+_cors_origins = _parse_cors_origins()
+_has_wildcard = "*" in _cors_origins or not _cors_origins
+_allow_origins = [o for o in _cors_origins if o != "*"] if not _has_wildcard else ["*"]
+_allow_origin_regex = r"https?://.*" if _has_wildcard else None
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_parse_cors_origins(),
+    allow_origins=_allow_origins,
+    allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # Mount static files for uploads
@@ -443,8 +455,15 @@ def marketplace_trends(db: Session = Depends(get_db)):
 
 
 @app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
+def healthz(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database connection check failed: {str(e)}"
+        )
 
 
 @app.get("/superadmin/stats")

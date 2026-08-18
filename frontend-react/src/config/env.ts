@@ -10,9 +10,9 @@ function resolveDefaultApiBase() {
     return "http://localhost:8000";
   }
 
-  // GitHub Pages — API is on Railway
+  // GitHub Pages — API falls back to Render backend
   if (hostname.endsWith("github.io")) {
-    return "https://sales-backend.up.railway.app";
+    return "https://sales-backend.onrender.com";
   }
 
   // Railway — API on the same Railway app

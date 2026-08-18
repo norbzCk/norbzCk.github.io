@@ -18,21 +18,41 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _column_exists(table: str, column: str) -> bool:
+    bind = op.get_bind()
+    row = bind.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
+    ), {"t": table, "c": column}).fetchone()
+    return row is not None
+
+
 def upgrade() -> None:
-    """Add supabase_uid columns to user tables for Supabase Auth integration."""
-    op.add_column('users', sa.Column('supabase_uid', sa.String(), nullable=True))
-    op.add_column('business_users', sa.Column('supabase_uid', sa.String(), nullable=True))
-    op.add_column('logistics_users', sa.Column('supabase_uid', sa.String(), nullable=True))
-    op.create_index(op.f('ix_users_supabase_uid'), 'users', ['supabase_uid'], unique=True)
-    op.create_index(op.f('ix_business_users_supabase_uid'), 'business_users', ['supabase_uid'], unique=True)
-    op.create_index(op.f('ix_logistics_users_supabase_uid'), 'logistics_users', ['supabase_uid'], unique=True)
+    """Add supabase_uid columns to user tables for Supabase Auth integration.
+    Idempotent — safe to re-run on databases where create_all() already
+    created the columns."""
+    for table in ('users', 'business_users', 'logistics_users'):
+        if not _column_exists(table, 'supabase_uid'):
+            op.add_column(table, sa.Column('supabase_uid', sa.String(), nullable=True))
+        idx_name = f'ix_{table}_supabase_uid'
+        # Check if index already exists
+        bind = op.get_bind()
+        exists = bind.execute(sa.text(
+            "SELECT 1 FROM pg_indexes WHERE indexname = :idx"
+        ), {"idx": idx_name}).fetchone()
+        if not exists:
+            op.create_index(idx_name, table, ['supabase_uid'], unique=True)
 
 
 def downgrade() -> None:
     """Remove supabase_uid columns."""
-    op.drop_index(op.f('ix_users_supabase_uid'), table_name='users')
-    op.drop_index(op.f('ix_business_users_supabase_uid'), table_name='business_users')
-    op.drop_index(op.f('ix_logistics_users_supabase_uid'), table_name='logistics_users')
-    op.drop_column('users', 'supabase_uid')
-    op.drop_column('business_users', 'supabase_uid')
-    op.drop_column('logistics_users', 'supabase_uid')
+    for table in ('users', 'business_users', 'logistics_users'):
+        idx_name = f'ix_{table}_supabase_uid'
+        bind = op.get_bind()
+        exists = bind.execute(sa.text(
+            "SELECT 1 FROM pg_indexes WHERE indexname = :idx"
+        ), {"idx": idx_name}).fetchone()
+        if exists:
+            op.drop_index(idx_name, table_name=table)
+        if _column_exists(table, 'supabase_uid'):
+            op.drop_column(table, 'supabase_uid')

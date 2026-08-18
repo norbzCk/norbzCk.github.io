@@ -18,7 +18,7 @@ from urllib.parse import quote_plus, urlparse, urlunparse
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
-from backend.database import resolve_database_url, _ensure_ssl_mode
+from backend.database import resolve_database_url, _ensure_ssl_mode, _fix_password_encoding
 from backend.models import Base
 
 
@@ -35,6 +35,7 @@ def _resolve_supabase_url() -> str:
         sys.exit(1)
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    url = _fix_password_encoding(url)
     return _ensure_ssl_mode(url)
 
 
@@ -78,7 +79,7 @@ def sync(direction: str, dry_run: bool = False) -> None:
             conn.execute(text("SET session_replication_role = 'replica';"))
             for name in reversed(table_names):
                 conn.execute(text(f"TRUNCATE TABLE {name} RESTART IDENTITY CASCADE;"))
-            conn.execute(text("SET session_replication_role = 'DEFAULT';"))
+            conn.execute(text("SET session_replication_role = 'origin';"))
 
     # Copy data table by table
     SourceSession = sessionmaker(bind=source_engine)
