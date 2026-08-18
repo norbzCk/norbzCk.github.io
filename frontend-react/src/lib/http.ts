@@ -26,12 +26,20 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Content-Type", "application/json");
   }
 
+  // Send the stored access token (Supabase JWT or app JWT) as a Bearer header
+  if (options.auth !== false) {
+    const token = getStoredToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
   const response = await fetch(`${env.apiBase}${path}`, {
     ...options,
     method,
     headers,
     body: serializeBody(options.body),
-    credentials: "include", // Ensure cookies are sent with requests
+    credentials: "include", // Send cookies (for backward-compat with app JWT flow)
     cache: options.cache ?? (method === "GET" ? "no-store" : options.cache),
   });
 

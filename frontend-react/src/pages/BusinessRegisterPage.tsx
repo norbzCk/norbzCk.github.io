@@ -3,11 +3,13 @@ import { AuthScene } from "../components/AuthScene";
 import { persistSession } from "../features/auth/authStorage";
 import type { SessionUser } from "../types/auth";
 import { apiRequest } from "../lib/http";
+import { useAuth } from "../features/auth/AuthContext";
 
 export function BusinessRegisterPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { register: supabaseRegister } = useAuth();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,15 +38,25 @@ export function BusinessRegisterPage() {
     };
 
     try {
-      const data = await apiRequest<{ access_token?: string; user?: SessionUser }>("/business/register", {
+      // Step 1: Create a Supabase Auth account (handles email verification, password reset)
+      await supabaseRegister({
+        name: payload.business_name,
+        email: payload.email,
+        password: payload.password,
+        phone: payload.phone,
+        userType: "business",
+      });
+
+      // Step 2: Create the detailed BusinessUser record in the app DB
+      const data = await apiRequest<{ user?: SessionUser }>("/business/register", {
         method: "POST",
-        auth: false,
         body: payload,
       });
-      setSuccess("Business registered successfully.");
-      if (data.access_token && data.user) {
-        persistSession(data.access_token, data.user, "business");
+
+      if (data.user) {
+        persistSession(localStorage.getItem("access_token") || "", { ...data.user, role: "seller" }, "business");
       }
+      setSuccess("Business registered successfully.");
       setTimeout(() => {
         window.location.href = "/app/seller";
       }, 900);

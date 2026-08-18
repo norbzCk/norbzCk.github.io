@@ -146,8 +146,12 @@ def register_logistics(
     payload: LogisticsRegister,
     background_tasks: BackgroundTasks,
     response: Response,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    from backend.app.supabase_auth import extract_supabase_uid_from_request
+    supabase_uid = extract_supabase_uid_from_request(request, db)
+
     existing = _get_logistics_user(db, payload.phone)
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already registered")
@@ -165,6 +169,7 @@ def register_logistics(
         license_number=payload.license_number,
         base_area=payload.base_area,
         coverage_areas=payload.coverage_areas,
+        supabase_uid=supabase_uid,
     )
     db.add(user)
     db.commit()

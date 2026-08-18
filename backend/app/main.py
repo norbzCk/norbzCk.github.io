@@ -72,6 +72,11 @@ def _ensure_schema_columns():
         # Lightweight schema patching for existing databases (no Alembic yet).
         add_column_if_not_exists("sales", "created_by", "created_by INTEGER")
 
+        # Supabase Auth integration columns
+        add_column_if_not_exists("users", "supabase_uid", "supabase_uid VARCHAR")
+        add_column_if_not_exists("business_users", "supabase_uid", "supabase_uid VARCHAR")
+        add_column_if_not_exists("logistics_users", "supabase_uid", "supabase_uid VARCHAR")
+
         # Product catalog: allow storing picture URL per item.
         add_column_if_not_exists("products", "image_url", "image_url VARCHAR")
         add_column_if_not_exists("products", "rating_avg", "rating_avg DOUBLE PRECISION DEFAULT 0")

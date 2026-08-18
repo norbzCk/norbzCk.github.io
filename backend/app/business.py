@@ -302,8 +302,12 @@ def register_business(
     payload: BusinessRegister,
     background_tasks: BackgroundTasks,
     response: Response,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    from backend.app.supabase_auth import extract_supabase_uid_from_request
+    supabase_uid = extract_supabase_uid_from_request(request, db)
+
     existing = _get_business_user(db, payload.phone)
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already registered")
@@ -327,6 +331,7 @@ def register_business(
         shop_logo_url=payload.shop_logo_url,
         shop_images=payload.shop_images,
         role=payload.role,
+        supabase_uid=supabase_uid,
     )
     db.add(user)
     db.commit()

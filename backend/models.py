@@ -108,6 +108,7 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     is_verified = Column(Boolean, nullable=False, default=False)
     verification_token = Column(String, nullable=True)
+    supabase_uid = Column(String, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -157,6 +158,7 @@ class BusinessUser(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     is_verified = Column(Boolean, nullable=False, default=False)
     verification_token = Column(String, nullable=True)
+    supabase_uid = Column(String, nullable=True, index=True)
     role = Column(String, nullable=False, default="seller")  # seller, buyer
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -205,6 +207,7 @@ class LogisticsUser(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     is_verified = Column(Boolean, nullable=False, default=False)
     verification_token = Column(String, nullable=True)
+    supabase_uid = Column(String, nullable=True, index=True)
     role = Column(String, nullable=False, default="logistics")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

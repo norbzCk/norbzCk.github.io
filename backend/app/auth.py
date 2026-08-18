@@ -328,10 +328,25 @@ def get_optional_current_user(
     if not token:
         return None
 
+    # 1. Try the existing app JWT (signed with APP_SECRET_KEY)
     try:
         payload = decode_token(token, db)
         return _resolve_user_from_payload(db, payload)
     except HTTPException:
+        pass
+    except Exception:
+        pass
+
+    # 2. Fall back to Supabase Auth JWT
+    try:
+        from backend.app.supabase_auth import verify_supabase_token, _resolve_app_user, _ensure_supabase_uid
+        payload = verify_supabase_token(token)
+        user = _resolve_app_user(db, payload)
+        _ensure_supabase_uid(db, user, str(payload.get("sub", "")))
+        return user
+    except HTTPException:
+        return None
+    except Exception:
         return None
 
 
@@ -339,7 +354,10 @@ def get_user_from_token(
     token: str,
     db: Session | None = None,
 ) -> User | BusinessUser | LogisticsUser | None:
-    """Extract user from JWT token without requiring FastAPI dependencies"""
+    """Extract user from JWT token without requiring FastAPI dependencies.
+
+    Tries the app JWT first; falls back to Supabase Auth JWT.
+    """
     if db is None:
         from backend.database import SessionLocal
         db = SessionLocal()
@@ -348,8 +366,19 @@ def get_user_from_token(
         close_db = False
 
     try:
-        payload = decode_token(token, db)
-        return _resolve_user_from_payload(db, payload)
+        # 1. Try app JWT
+        try:
+            payload = decode_token(token, db)
+            return _resolve_user_from_payload(db, payload)
+        except Exception:
+            pass
+
+        # 2. Try Supabase JWT
+        from backend.app.supabase_auth import verify_supabase_token, _resolve_app_user, _ensure_supabase_uid
+        payload = verify_supabase_token(token)
+        user = _resolve_app_user(db, payload)
+        _ensure_supabase_uid(db, user, str(payload.get("sub", "")))
+        return user
     except Exception:
         return None
     finally:
@@ -482,6 +511,9 @@ def register(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    from backend.app.supabase_auth import extract_supabase_uid_from_request
+    supabase_uid = extract_supabase_uid_from_request(request, db)
+
     name = (payload.get("name") or "").strip()
     email = (payload.get("email") or "").strip().lower()
     password = payload.get("password") or ""
@@ -514,11 +546,12 @@ def register(
         is_active=True,
         is_verified=False,
         verification_token=verification_token,
+        supabase_uid=supabase_uid,
     )
     db.add(model)
     db.commit()
     db.refresh(model)
-    
+
     recipient_type, recipient_id, recipient_email, recipient_name = resolve_subject(model)
     create_notification(
         db,
@@ -564,6 +597,9 @@ def register_customer(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    from backend.app.supabase_auth import extract_supabase_uid_from_request
+    supabase_uid = extract_supabase_uid_from_request(request, db)
+
     name = (payload.get("name") or "").strip()
     phone = (payload.get("phone") or "").strip()
     email = (payload.get("email") or "").strip().lower() or None
@@ -595,6 +631,7 @@ def register_customer(
         is_active=True,
         is_verified=False,
         verification_token=verification_token,
+        supabase_uid=supabase_uid,
     )
     db.add(model)
     db.commit()
@@ -992,3 +1029,103 @@ def list_users(
         }
         for u in rows
     ]
+
+
+@router.post("/supabase/link")
+def link_supabase_account(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    """Link the currently-authenticated app user to a Supabase Auth account.
+
+    The frontend sends the Supabase access_token (obtained via supabase.auth).
+    We verify it, store the supabase_uid, and return the linked user info.
+    """
+    supabase_token = payload.get("supabase_access_token") or ""
+    if not supabase_token:
+        raise HTTPException(status_code=400, detail="supabase_access_token is required")
+
+    from backend.app.supabase_auth import verify_supabase_token
+
+    supabase_payload = verify_supabase_token(supabase_token)
+    supabase_uid = str(supabase_payload.get("sub", ""))
+    supabase_email = (supabase_payload.get("email") or "").strip().lower()
+
+    # Prevent re-linking to a different Supabase account
+    if getattr(current, "supabase_uid", None) and current.supabase_uid != supabase_uid:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already linked to Supabase UID {current.supabase_uid}",
+        )
+
+    # Prevent two app users from linking the same Supabase UID
+    for model_cls in (User, BusinessUser, LogisticsUser):
+        existing = db.query(model_cls).filter(model_cls.supabase_uid == supabase_uid).first()
+        if existing and existing.id != current.id:
+            raise HTTPException(
+                status_code=409,
+                detail="This Supabase account is already linked to another user",
+            )
+
+    current.supabase_uid = supabase_uid
+    # If the app user doesn't have an email yet, take it from Supabase
+    if hasattr(current, "email") and not getattr(current, "email", None) and supabase_email:
+        current.email = supabase_email
+    db.add(current)
+    db.commit()
+
+    return {
+        "message": "Supabase account linked",
+        "supabase_uid": supabase_uid,
+        "user": {
+            "id": current.id,
+            "name": getattr(current, "name", getattr(current, "business_name", "User")),
+            "email": getattr(current, "email", None),
+            "role": current.role,
+        },
+    }
+
+
+@router.get("/supabase/me")
+def supabase_me(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """Endpoint callable with a Supabase JWT in the Authorization header.
+
+    Returns app user info (creating a minimal record if the Supabase user
+    has not yet been linked to an app account).
+    """
+    token = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        token = credentials.credentials
+    elif "access_token" in request.cookies:
+        token = request.cookies["access_token"]
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    from backend.app.supabase_auth import verify_supabase_token, _resolve_or_create_app_user, _ensure_supabase_uid, _resolve_user_type
+
+    payload = verify_supabase_token(token)
+    user_type = _resolve_user_type(payload)
+
+    user = _resolve_or_create_app_user(db, payload)
+
+    # If user exists but has no supabase_uid, link it now (auto-link)
+    if getattr(user, "supabase_uid", None) is None:
+        _ensure_supabase_uid(db, user, str(payload.get("sub", "")))
+
+    return {
+        "id": user.id,
+        "name": getattr(user, "name", getattr(user, "business_name", "User")),
+        "email": getattr(user, "email", None),
+        "phone": getattr(user, "phone", None),
+        "role": user.role,
+        "user_type": user_type,
+        "is_verified": getattr(user, "is_verified", True),
+        "is_active": user.is_active,
+    }

@@ -3,11 +3,13 @@ import { AuthScene } from "../components/AuthScene";
 import { persistSession } from "../features/auth/authStorage";
 import type { SessionUser } from "../types/auth";
 import { apiRequest } from "../lib/http";
+import { useAuth } from "../features/auth/AuthContext";
 
 export function LogisticsRegisterPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { register: supabaseRegister } = useAuth();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -30,13 +32,23 @@ export function LogisticsRegisterPage() {
     };
 
     try {
-      const data = await apiRequest<{ access_token?: string; user?: SessionUser }>("/logistics/register", {
+      // Step 1: Create a Supabase Auth account
+      await supabaseRegister({
+        name: payload.name,
+        email: payload.email,
+        password: payload.password,
+        phone: payload.phone,
+        userType: "logistics",
+      });
+
+      // Step 2: Create the detailed LogisticsUser record in the app DB
+      const data = await apiRequest<{ user?: SessionUser }>("/logistics/register", {
         method: "POST",
-        auth: false,
         body: payload,
       });
-      if (data.access_token && data.user) {
-        persistSession(data.access_token, { ...data.user, role: "logistics" }, "logistics");
+
+      if (data.user) {
+        persistSession(localStorage.getItem("access_token") || "", { ...data.user, role: "logistics" }, "logistics");
       }
       setSuccess("Logistics account registered successfully.");
       setTimeout(() => {

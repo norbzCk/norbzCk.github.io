@@ -1,12 +1,11 @@
 import { FormEvent, useState } from "react";
 import { AuthScene } from "../components/AuthScene";
 import { useNavigate } from "react-router-dom";
-import { apiRequest } from "../lib/http";
-import { persistSession } from "../features/auth/authStorage";
-import type { SessionUser } from "../types/auth";
+import { useAuth } from "../features/auth/AuthContext";
 
 export function CustomerRegisterPage() {
   const navigate = useNavigate();
+  const { register } = useAuth();
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -23,17 +22,11 @@ export function CustomerRegisterPage() {
       email: String(form.get("email") || "").trim().toLowerCase(),
       phone: String(form.get("phone") || "").trim(),
       password: String(form.get("password") || ""),
+      userType: "user" as const,
     };
 
     try {
-      const data = await apiRequest<{ access_token?: string; user?: SessionUser; userType?: string }>("/auth/register-customer", {
-        method: "POST",
-        auth: false,
-        body: payload,
-      });
-      if (data.access_token && data.user) {
-        persistSession(data.access_token, data.user, data.userType || "user");
-      }
+      await register(payload);
       setSuccess("Customer registered successfully.");
       setTimeout(() => navigate("/app/customer"), 900);
     } catch (err) {
