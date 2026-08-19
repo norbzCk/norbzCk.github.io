@@ -56,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             persistSession(session.access_token, next, storedType || "user");
           }
           setUser(next);
-        } else {
+        } else if (!getStoredToken()) {
           clearStoredSession();
           setUser(null);
           setToken(null);
@@ -95,27 +95,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        clearStoredSession();
-        setUser(null);
-        setToken(null);
-        return null;
+      if (session?.access_token) {
+        localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
+        setToken(session.access_token);
+
+        const fetched = await apiRequest<SessionUser>("/auth/supabase/me", {
+          auth: true,
+        });
+        const storedType = getStoredUserType();
+        const userType: UserType = (fetched as any).user_type || storedType || "user";
+        const next = normalizeUser(fetched, userType);
+        if (next) {
+          persistSession(session.access_token, next, userType);
+        }
+        setUser(next);
+        return next;
       }
 
-      localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
-      setToken(session.access_token);
-
-      const fetched = await apiRequest<SessionUser>("/auth/supabase/me", {
-        auth: true,
-      });
-      const storedType = getStoredUserType();
-      const userType: UserType = (fetched as any).user_type || storedType || "user";
-      const next = normalizeUser(fetched, userType);
-      if (next) {
-        persistSession(session.access_token, next, userType);
+      const storedToken = getStoredToken();
+      if (storedToken) {
+        const response = await apiRequest<{ access_token: string }>("/auth/refresh", {
+          method: "POST",
+          auth: false,
+        });
+        const userType = getStoredUserType();
+        const endpoint =
+          userType === "business"
+            ? "/business/me"
+            : userType === "logistics"
+              ? "/logistics/me"
+              : "/auth/me";
+        const fallbackType = userType || "user";
+        const fetched = await apiRequest<SessionUser>(endpoint);
+        const next = normalizeUser(fetched, fallbackType);
+        if (next) {
+          persistSession(response.access_token, next, userType);
+        }
+        setUser(next);
+        setToken(response.access_token);
+        return next;
       }
-      setUser(next);
-      return next;
+
+      clearStoredSession();
+      setUser(null);
+      setToken(null);
+      return null;
     } catch (_err) {
       clearStoredSession();
       setUser(null);

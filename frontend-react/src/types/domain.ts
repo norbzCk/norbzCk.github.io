@@ -219,6 +219,8 @@ export interface Customer {
   email?: string | null;
   phone?: string | null;
   location?: string | null;
+  is_verified?: boolean;
+  is_active?: boolean;
 }
 
 export interface AdminUser {
@@ -227,6 +229,7 @@ export interface AdminUser {
   email: string;
   role: string;
   is_active: boolean;
+  is_verified?: boolean;
 }
 
 export interface LogisticsDelivery {
@@ -373,6 +376,8 @@ export interface SuperadminOverview {
   low_stock_products: number;
   pending_business_verifications: number;
   pending_logistics_verifications: number;
+  pending_user_verifications: number;
+  pending_user_verifications: number;
   seller_leaderboard: Array<{
     id: number;
     business_name: string;
@@ -433,6 +438,15 @@ export interface VerificationLogistics {
   base_area?: string | null;
   coverage_areas?: string | null;
   verification_status: string;
+  created_at?: string | null;
+}
+
+export interface VerificationUser {
+  id: number;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  is_verified: boolean;
   created_at?: string | null;
 }
 

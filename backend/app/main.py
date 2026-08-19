@@ -216,6 +216,7 @@ def seed_marketplace_demo_data(db: Session) -> None:
             street=entry["street"],
             role="seller",
             is_active=True,
+            is_verified=True,
             verification_status="verified",
         )
         db.add(model)
@@ -500,6 +501,7 @@ def superadmin_businessmen(
             "owner_name": item.owner_name,
             "email": item.email,
             "phone": item.phone,
+            "verification_status": item.verification_status,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in items
@@ -611,6 +613,8 @@ def superadmin_customers(
             "name": item.name,
             "email": item.email,
             "phone": item.phone,
+            "is_verified": item.is_verified,
+            "is_active": item.is_active,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in items
@@ -647,6 +651,7 @@ def create_superadmin_customer(
         password_hash=hash_password(password),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db.add(model)
     db.commit()
@@ -691,6 +696,7 @@ def superadmin_logistics(
             "email": item.email,
             "phone": item.phone,
             "account_type": item.account_type,
+            "verification_status": item.verification_status,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in items
@@ -710,6 +716,12 @@ def superadmin_verifications(
     logistics_items = (
         db.query(LogisticsUser)
         .order_by(LogisticsUser.verification_status.asc(), LogisticsUser.created_at.desc(), LogisticsUser.id.desc())
+        .all()
+    )
+    users = (
+        db.query(User)
+        .filter(User.role == "user", User.is_verified == False)
+        .order_by(User.created_at.desc(), User.id.desc())
         .all()
     )
     return {
@@ -741,6 +753,17 @@ def superadmin_verifications(
                 "created_at": item.created_at.isoformat() if item.created_at else None,
             }
             for item in logistics_items
+        ],
+        "users": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "email": item.email,
+                "phone": item.phone,
+                "is_verified": item.is_verified,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+            for item in users
         ],
     }
 
@@ -898,6 +921,66 @@ def delete_superadmin_customer(
     db.delete(item)
     db.commit()
     return {"message": "Customer account deleted"}
+
+
+@app.patch("/superadmin/customers/{customer_id}/verification")
+def update_superadmin_customer_verification(
+    customer_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("super_admin", "owner")),
+):
+    item = db.query(User).filter(User.id == customer_id, User.role == "user").first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Customer account not found")
+
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in {"verified", "unverified"}:
+        raise HTTPException(status_code=400, detail="Invalid verification status")
+
+    item.is_verified = status == "verified"
+    item.verification_token = None
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "message": "Customer verification updated",
+        "id": item.id,
+        "is_verified": item.is_verified,
+    }
+
+
+@app.patch("/superadmin/customers/{customer_id}")
+def update_superadmin_customer(
+    customer_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("super_admin", "owner")),
+):
+    item = db.query(User).filter(User.id == customer_id, User.role == "user").first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Customer account not found")
+
+    role = str(payload.get("role") or item.role).strip().lower()
+    if role not in {"user", "admin", "super_admin", "owner"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    is_active = payload.get("is_active")
+    if is_active is not None:
+        item.is_active = bool(is_active)
+
+    item.role = role
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "name": item.name,
+        "email": item.email,
+        "role": item.role,
+        "is_active": item.is_active,
+        "is_verified": item.is_verified,
+    }
 
 
 @app.delete("/superadmin/logistics/{logistics_id}")

@@ -30,7 +30,7 @@ import {
 import { useAuth } from "../features/auth/AuthContext";
 import { apiRequest } from "../lib/http";
 import { PageIntro, StatCards, SectionCard } from "../components/ui/PageSections";
-import type { SuperadminOverview, VerificationBusinessman, VerificationLogistics } from "../types/domain";
+import type { SuperadminOverview, VerificationBusinessman, VerificationLogistics, VerificationUser } from "../types/domain";
 import { env } from "../config/env";
 
 interface Businessman {
@@ -39,6 +39,7 @@ interface Businessman {
   owner_name: string;
   email: string;
   phone: string;
+  verification_status?: string;
   created_at?: string;
 }
 
@@ -48,6 +49,8 @@ interface Customer {
   email: string;
   phone: string;
   created_at?: string;
+  is_verified?: boolean;
+  is_active?: boolean;
 }
 
 interface LogisticsUser {
@@ -56,6 +59,7 @@ interface LogisticsUser {
   email: string;
   phone: string;
   account_type: string;
+  verification_status?: string;
   created_at?: string;
 }
 
@@ -104,11 +108,12 @@ export function SuperadminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ActiveTab>("businessmen");
   const [showAddModal, setShowAddModal] = useState(false);
-  const [verificationTab, setVerificationTab] = useState<"businessmen" | "logistics">("businessmen");
+  const [verificationTab, setVerificationTab] = useState<"businessmen" | "logistics" | "users">("businessmen");
   const [verificationData, setVerificationData] = useState<{
     businessmen: VerificationBusinessman[];
     logistics: VerificationLogistics[];
-  }>({ businessmen: [], logistics: [] });
+    users: VerificationUser[];
+  }>({ businessmen: [], logistics: [], users: [] });
 
   useEffect(() => {
     void loadData();
@@ -126,10 +131,11 @@ export function SuperadminDashboardPage() {
          apiRequest<GlobalAnalytics>("/dashboard/analytics"),
          apiRequest<Dispute[]>("/disputes"),
        ]);
-       const verifications = await apiRequest<{
-         businessmen: VerificationBusinessman[];
-         logistics: VerificationLogistics[];
-       }>("/superadmin/verifications");
+        const verifications = await apiRequest<{
+          businessmen: VerificationBusinessman[];
+          logistics: VerificationLogistics[];
+          users: VerificationUser[];
+        }>("/superadmin/verifications");
        setOverview(overviewData);
        setBusinessmen(businessmenData);
        setCustomers(customersData);
@@ -144,16 +150,31 @@ export function SuperadminDashboardPage() {
      }
    }
 
-  async function updateVerification(kind: "businessmen" | "logistics", id: number, status: string) {
+  async function updateVerification(kind: "businessmen" | "logistics" | "users", id: number, status: string) {
     try {
-      await apiRequest(`/superadmin/${kind}/${id}/verification`, {
+      const endpoint = kind === "users"
+        ? `/superadmin/customers/${id}/verification`
+        : `/superadmin/${kind}/${id}/verification`;
+      await apiRequest(endpoint, {
         method: "PATCH",
         body: { status },
       });
-      setSuccess(`${kind === "businessmen" ? "Seller" : "Logistics"} verification updated.`);
+      setSuccess(`${kind === "businessmen" ? "Seller" : kind === "logistics" ? "Logistics" : "Customer"} verification updated.`);
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update verification");
+    }
+  }
+
+  async function deleteEntity(kind: "businessmen" | "customers" | "logistics", id: number) {
+    if (!confirm("Permanently remove this entity? This action cannot be undone.")) return;
+    try {
+      const endpoint = `/superadmin/${kind}/${id}`;
+      await apiRequest(endpoint, { method: "DELETE" });
+      setSuccess("Entity removed successfully.");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete entity");
     }
   }
 
@@ -164,6 +185,7 @@ export function SuperadminDashboardPage() {
       { id: "sellers", label: "Active Sellers", value: overview.active_businessmen, icon: <ShoppingBag size={18} />, note: `${overview.total_businessmen} registered` },
       { id: "transit", label: "In Transit", value: overview.in_transit_orders, icon: <Truck size={18} />, note: "Active deliveries" },
       { id: "stock", label: "Inventory Risk", value: overview.low_stock_products, icon: <AlertTriangle size={18} />, note: "Low stock items" },
+      { id: "pending-users", label: "Pending Users", value: overview.pending_user_verifications, icon: <Users size={18} />, note: "Awaiting confirmation" },
     ];
   }, [overview]);
 
@@ -325,6 +347,12 @@ export function SuperadminDashboardPage() {
               >
                 Nodes
               </button>
+              <button 
+                onClick={() => setVerificationTab("users")}
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${verificationTab === 'users' ? 'bg-surface text-brand shadow-sm' : 'text-text-muted hover:text-text'}`}
+              >
+                Users
+              </button>
             </div>
           }
         >
@@ -346,7 +374,7 @@ export function SuperadminDashboardPage() {
                     </div>
                   ))}
                 </motion.div>
-              ) : (
+              ) : verificationTab === "logistics" ? (
                 <motion.div key="v-log" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
                   {verificationData.logistics.filter(i => i.verification_status !== 'verified').length === 0 ? <p className="py-10 text-center text-text-muted text-[10px] font-black uppercase tracking-widest opacity-40">All logistics nodes verified.</p> : null}
                   {verificationData.logistics.filter(i => i.verification_status !== 'verified').map(item => (
@@ -358,6 +386,21 @@ export function SuperadminDashboardPage() {
                       <div className="flex gap-2">
                         <button onClick={() => updateVerification("logistics", item.id, "verified")} className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center hover:bg-emerald-500 hover:text-white transition-all shadow-sm"><CheckCircle2 size={14} /></button>
                         <button onClick={() => updateVerification("logistics", item.id, "rejected")} className="w-8 h-8 rounded-lg bg-danger/10 text-danger flex items-center justify-center hover:bg-danger hover:text-white transition-all shadow-sm"><X size={14} /></button>
+                      </div>
+                    </div>
+                  ))}
+                </motion.div>
+              ) : (
+                <motion.div key="v-users" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
+                  {verificationData.users.length === 0 ? <p className="py-10 text-center text-text-muted text-[10px] font-black uppercase tracking-widest opacity-40">All user emails confirmed.</p> : null}
+                  {verificationData.users.map(item => (
+                    <div key={item.id} className="p-4 rounded-xl bg-surface-soft/50 border border-border flex items-center justify-between group hover:border-brand/40 transition-all">
+                      <div className="min-w-0">
+                        <strong className="text-text font-bold block truncate text-sm">{item.name}</strong>
+                        <p className="text-[9px] font-bold text-text-muted uppercase tracking-wider mt-1">{item.email}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => updateVerification("users", item.id, "verified")} className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center hover:bg-emerald-500 hover:text-white transition-all shadow-sm"><CheckCircle2 size={14} /></button>
                       </div>
                     </div>
                   ))}
@@ -396,6 +439,7 @@ export function SuperadminDashboardPage() {
                 <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Protocol ID</th>
                 <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Account Identity</th>
                 <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Communication</th>
+                <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Status</th>
                 <th className="pb-4 text-right text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Ops</th>
               </tr>
             </thead>
@@ -414,7 +458,7 @@ export function SuperadminDashboardPage() {
                       </div>
                       <div className="min-w-0">
                         <strong className="text-sm font-black text-text block truncate">{'business_name' in item ? item.business_name : item.name}</strong>
-                        <p className="text-[9px] font-bold text-text-muted uppercase tracking-wider mt-0.5">{('owner_name' in item ? item.owner_name : 'Standard Access')}</p>
+                        <p className="text-[9px] font-bold text-text-muted uppercase tracking-wider mt-0.5">{('owner_name' in item ? item.owner_name : activeTab === 'customers' ? 'Buyer Account' : 'Standard Access')}</p>
                       </div>
                     </div>
                   </td>
@@ -424,8 +468,33 @@ export function SuperadminDashboardPage() {
                       <p className="text-[9px] font-medium text-text-muted tracking-wide">{item.phone}</p>
                     </div>
                   </td>
+                  <td className="py-4 pr-4">
+                    <div className="flex flex-col gap-1">
+                      {activeTab === 'customers' && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
+                          item.is_verified ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                        }`}>
+                          {item.is_verified ? 'Confirmed' : 'Unconfirmed'}
+                        </span>
+                      )}
+                      {activeTab === 'businessmen' && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
+                          item.verification_status === 'verified' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                        }`}>
+                          {item.verification_status || 'pending'}
+                        </span>
+                      )}
+                      {activeTab === 'logistics' && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
+                          item.verification_status === 'verified' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                        }`}>
+                          {item.verification_status || 'pending'}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-4 text-right">
-                    <button className="w-8 h-8 rounded-lg bg-danger/5 text-danger flex items-center justify-center ml-auto hover:bg-danger hover:text-white transition-all opacity-0 group-hover:opacity-100">
+                    <button onClick={() => void deleteEntity(activeTab, item.id)} className="w-8 h-8 rounded-lg bg-danger/5 text-danger flex items-center justify-center ml-auto hover:bg-danger hover:text-white transition-all opacity-0 group-hover:opacity-100">
                       <Trash2 size={14} />
                     </button>
                   </td>
@@ -436,6 +505,124 @@ export function SuperadminDashboardPage() {
           {currentData.length === 0 && <div className="py-20 text-center text-text-muted text-[10px] font-black uppercase tracking-[0.3em] opacity-40">Ledger synchronization pending...</div>}
         </div>
       </SectionCard>
+
+      {overview?.recent_orders && overview.recent_orders.length > 0 && (
+        <SectionCard title="Recent Orders" description="Latest transactions across the marketplace network.">
+          <div className="overflow-x-auto no-scrollbar">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Order ID</th>
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Product</th>
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Status</th>
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Qty</th>
+                  <th className="pb-4 text-right text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Revenue</th>
+                  <th className="pb-4 text-right text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {overview.recent_orders.map((order) => (
+                  <tr key={order.id} className="group hover:bg-surface-soft/40 transition-colors">
+                    <td className="py-3 pr-4">
+                      <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg bg-surface-soft border border-border font-black text-[10px] text-brand">
+                        #{order.id}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4">
+                      <strong className="text-xs font-bold text-text block truncate max-w-[200px]">{order.product || "—"}</strong>
+                      <p className="text-[9px] font-medium text-text-muted">{order.category || ""}</p>
+                    </td>
+                    <td className="py-3 pr-4">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                        order.status === 'Received' || order.status === 'Delivered' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' :
+                        order.status === 'Pending' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                        'bg-slate-500/10 text-slate-500 border border-slate-500/20'
+                      }`}>
+                        {order.status || "pending"}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4 text-xs font-bold text-text">{order.quantity || 0}</td>
+                    <td className="py-3 pr-4 text-right text-xs font-bold text-text">TZS {(order.revenue || 0).toLocaleString()}</td>
+                    <td className="py-3 text-right text-[10px] font-medium text-text-muted">{order.date ? new Date(order.date).toLocaleDateString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {overview?.seller_leaderboard && overview.seller_leaderboard.length > 0 && (
+          <SectionCard title="Seller Leaderboard" description="Top performing marketplace nodes." className="lg:col-span-2">
+            <div className="space-y-3">
+              {overview.seller_leaderboard.map((seller, idx) => (
+                <div key={seller.id} className="flex items-center gap-4 p-4 rounded-xl bg-surface-soft/50 border border-border hover:border-brand/40 transition-all">
+                  <span className="text-lg font-black text-text-muted w-8 text-center">#{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <strong className="text-sm font-black text-text block truncate">{seller.business_name}</strong>
+                    <p className="text-[9px] font-bold text-text-muted uppercase tracking-wider">{seller.region} • {seller.area}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-black text-text">TZS {Number(seller.total_revenue || 0).toLocaleString()}</p>
+                    <p className="text-[9px] font-bold text-text-muted uppercase tracking-wider">{seller.total_sales || 0} sales • {Number(seller.rating || 0).toFixed(1)} rating</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
+
+        {overview?.insights && overview.insights.length > 0 && (
+          <SectionCard title="Platform Insights" description="AI-generated operational intelligence.">
+            <div className="space-y-4">
+              {overview.insights.map((insight) => (
+                <div key={insight.id} className="p-4 rounded-xl bg-surface-soft/50 border border-border">
+                  <h4 className="text-xs font-black text-text uppercase tracking-wider mb-1">{insight.title}</h4>
+                  <p className="text-[11px] font-medium text-text-muted leading-relaxed">{insight.message}</p>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
+      </div>
+
+      {overview?.inventory_watch && overview.inventory_watch.length > 0 && (
+        <SectionCard title="Inventory Watch" description="Products nearing stock-out across the network.">
+          <div className="overflow-x-auto no-scrollbar">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Product</th>
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Seller</th>
+                  <th className="pb-4 text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Area</th>
+                  <th className="pb-4 text-right text-[9px] font-black uppercase tracking-[0.2em] text-text-muted">Stock</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {overview.inventory_watch.map((item) => (
+                  <tr key={item.product_id} className="group hover:bg-surface-soft/40 transition-colors">
+                    <td className="py-3 pr-4">
+                      <strong className="text-xs font-bold text-text block truncate max-w-[200px]">{item.product_name}</strong>
+                    </td>
+                    <td className="py-3 pr-4 text-xs font-medium text-text-muted">{item.seller_name}</td>
+                    <td className="py-3 pr-4 text-xs font-medium text-text-muted">{item.seller_area || "—"}</td>
+                    <td className="py-3 text-right">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                        item.stock === 0 ? 'bg-danger/10 text-danger border border-danger/20' :
+                        item.stock < 3 ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                        'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                      }`}>
+                        {item.stock} left
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
 
       <AnimatePresence>
         {showAddModal && (

@@ -57,11 +57,11 @@ export function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     { to: "/app/customer", label: "Dashboard", icon: LayoutDashboard, show: isCustomer, end: true },
     { to: "/app/logistics", label: "Deliveries", icon: LayoutDashboard, show: isLogistics, end: true },
     
-    { to: "/app/products", label: "Marketplace", icon: Store, show: isSeller || isCustomer || isAdmin },
-    { to: "/app/orders", label: "Orders", icon: ShoppingCart, show: isSeller || isCustomer || isAdmin },
-    { to: "/app/payments", label: "Payments", icon: CreditCard, show: isCustomer },
-    { to: "/app/providers", label: "Suppliers", icon: Truck, show: isSeller || isAdmin },
-    { to: "/app/seller/deliveries", label: "Shipments", icon: Truck, show: isSeller },
+    { to: "/app/products", label: "Marketplace", icon: Store, show: isSeller || isCustomer || isAdmin || isSuperadmin },
+    { to: "/app/orders", label: "Orders", icon: ShoppingCart, show: isSeller || isCustomer || isAdmin || isSuperadmin },
+    { to: "/app/payments", label: "Payments", icon: CreditCard, show: isCustomer || isSuperadmin },
+    { to: "/app/providers", label: "Suppliers", icon: Truck, show: isSeller || isAdmin || isSuperadmin },
+    { to: "/app/seller/deliveries", label: "Shipments", icon: Truck, show: isSeller || isSuperadmin },
     
     { to: "/app/customers", label: "Customers", icon: Users, show: isSuperadmin },
     { to: "/app/users", label: "Directory", icon: Users, show: isSuperadmin || isAdmin },

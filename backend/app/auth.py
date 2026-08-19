@@ -740,6 +740,9 @@ def login(
     if not user or not verify_and_upgrade_password(password, user):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    if isinstance(user, User) and not user.is_verified:
+        raise HTTPException(status_code=401, detail="Please confirm your email before signing in")
+
     role = getattr(user, "role", None)
     if role is None:
         role = "logistics" if isinstance(user, LogisticsUser) else "user"
@@ -1000,6 +1003,7 @@ def create_user(
         password_hash=hash_password(password),
         role=role,
         is_active=True,
+        is_verified=True,
     )
     db.add(model)
     db.commit()
@@ -1026,9 +1030,57 @@ def list_users(
             "email": u.email,
             "role": u.role,
             "is_active": u.is_active,
+            "is_verified": u.is_verified,
         }
         for u in rows
     ]
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("admin", "super_admin", "owner")),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
+    return {"message": "User deleted"}
+
+
+@router.patch("/users/{user_id}")
+def update_user(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("admin", "super_admin", "owner")),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    role = str(payload.get("role") or user.role).strip().lower()
+    if role not in {"user", "admin", "super_admin", "owner"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    is_active = payload.get("is_active")
+    if is_active is not None:
+        user.is_active = bool(is_active)
+
+    user.role = role
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+    }
 
 
 @router.post("/supabase/link")

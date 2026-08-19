@@ -594,6 +594,7 @@ def build_superadmin_overview(db: Session) -> dict[str, Any]:
     low_stock_products = db.query(Product).filter(Product.is_active.isnot(False), Product.stock < 5).count()
     pending_business_verifications = db.query(BusinessUser).filter(BusinessUser.verification_status == "pending").count()
     pending_logistics_verifications = db.query(LogisticsUser).filter(LogisticsUser.verification_status == "pending").count()
+    pending_user_verifications = db.query(User).filter(User.is_verified == False).count()
 
     seller_rows = (
         db.query(BusinessUser)
@@ -670,6 +671,7 @@ def build_superadmin_overview(db: Session) -> dict[str, Any]:
         "low_stock_products": low_stock_products,
         "pending_business_verifications": pending_business_verifications,
         "pending_logistics_verifications": pending_logistics_verifications,
+        "pending_user_verifications": pending_user_verifications,
         "seller_leaderboard": seller_leaderboard[:6],
         "category_performance": category_performance,
         "recent_orders": [

@@ -13,6 +13,7 @@ import {
   Trash2, 
   Activity,
   Lock,
+  Unlock,
   UserPlus
 } from "lucide-react";
 import { useAuth } from "../features/auth/AuthContext";
@@ -68,6 +69,37 @@ export function UsersPage() {
       setError(err instanceof Error ? err.message : "Platform synchronization failure");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Permanently remove this identity? This action cannot be undone.")) return;
+    try {
+      await apiRequest(`/auth/users/${id}`, { method: "DELETE" });
+      setFlash("Identity removed successfully.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Identity removal failed");
+    }
+  }
+
+  async function handleRoleChange(id: number, role: string) {
+    try {
+      await apiRequest(`/auth/users/${id}`, { method: "PATCH", body: { role } });
+      setFlash("Access tier updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update access tier");
+    }
+  }
+
+  async function handleToggleActive(id: number, isActive: boolean) {
+    try {
+      await apiRequest(`/auth/users/${id}`, { method: "PATCH", body: { is_active: !isActive } });
+      setFlash("Node status updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update node status");
     }
   }
 
@@ -227,19 +259,39 @@ export function UsersPage() {
                   <RoleBadge role={entry.role} />
                 </div>
                 
-                <div className="space-y-4 pt-6 border-t border-border mt-auto">
+                 <div className="space-y-4 pt-6 border-t border-border mt-auto">
                   <div className="flex items-center gap-3 text-xs font-bold text-text-muted group/item cursor-pointer">
                     <Mail size={14} className="group-hover/item:text-brand transition-colors" />
                     <span className="truncate">{entry.email}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-[9px] font-black uppercase tracking-widest text-text-muted">Protocol ID: {entry.id.toString().padStart(4, '0')}</span>
-                    <button className="p-2 text-text-muted hover:text-danger transition-colors ml-auto opacity-0 group-hover:opacity-100">
-                      <Trash2 size={16} />
-                    </button>
-                    <button className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-brand hover:text-brand-strong transition-all">
-                      Config <ChevronRight size={12} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                        entry.is_verified ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                      }`}>
+                        {entry.is_verified ? 'Confirmed' : 'Unconfirmed'}
+                      </span>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                        entry.is_active ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-danger/10 text-danger border border-danger/20'
+                      }`}>
+                        {entry.is_active ? 'Active' : 'Disabled'}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      <select
+                        value={entry.role}
+                        onChange={(e) => void handleRoleChange(entry.id, e.target.value)}
+                        className="text-[9px] font-black uppercase tracking-wider bg-surface-soft border border-border rounded-lg px-2 py-1 outline-none focus:border-brand/40"
+                      >
+                        {roleOptions.map((role) => <option key={role} value={role}>{role.replace('_', ' ')}</option>)}
+                      </select>
+                      <button onClick={() => void handleToggleActive(entry.id, entry.is_active)} className={`p-2 rounded-lg transition-all ${entry.is_active ? 'bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500 hover:text-white' : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white'}`}>
+                        {entry.is_active ? <Lock size={14} /> : <Unlock size={14} />}
+                      </button>
+                      <button onClick={() => void handleDelete(entry.id)} className="p-2 text-text-muted hover:text-danger transition-colors">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </motion.article>
