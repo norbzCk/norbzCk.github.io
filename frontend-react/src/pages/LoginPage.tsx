@@ -18,9 +18,14 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
+  const { sendSmsOtp, verifySmsOtp } = useAuth() as any;
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [smsMode, setSmsMode] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [phoneValue, setPhoneValue] = useState("");
+  const [otpValue, setOtpValue] = useState("");
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -32,6 +37,17 @@ export function LoginPage() {
     const password = String(form.get("password") || "");
 
     try {
+      if (smsMode) {
+        // In SMS mode, identifier contains phone and password field is OTP
+        const phone = identifier;
+        const token = password;
+        await verifySmsOtp(phone, token);
+        // successful; navigate to home
+        const from = (location.state as { from?: string } | null)?.from;
+        navigate(from || getPostLoginPath(null as any));
+        return;
+      }
+
       const user = await login(identifier, password);
       const from = (location.state as { from?: string } | null)?.from;
       navigate(from || getPostLoginPath(user));
@@ -44,7 +60,7 @@ export function LoginPage() {
 
   return (
     <AuthScene
-      eyebrow="Identity Secure"
+      eyebrow="Identity Secured"
       title="Access your workspace"
       description="Enter your credentials to manage your marketplace activity and track your performance."
       bullets={[
@@ -84,8 +100,10 @@ export function LoginPage() {
               </div>
               <input 
                 name="identifier" 
+                value={smsMode ? phoneValue : undefined}
+                onChange={smsMode ? (e) => setPhoneValue(e.target.value) : undefined}
                 className="w-full h-14 pl-12 pr-5 bg-surface-soft border border-transparent focus:border-brand/30 focus:bg-surface rounded-2xl outline-none transition-all font-semibold text-text placeholder:text-text-muted"
-                placeholder="Email or Phone" 
+                placeholder={smsMode ? "Phone (e.g. +255700...)" : "Email or Phone"} 
                 required 
               />
             </div>
@@ -101,9 +119,11 @@ export function LoginPage() {
               </div>
               <input
                 name="password"
-                type={showPassword ? "text" : "password"}
+                value={smsMode ? otpValue : undefined}
+                onChange={smsMode ? (e) => setOtpValue(e.target.value) : undefined}
+                type={smsMode ? "text" : (showPassword ? "text" : "password")}
                 className="w-full h-14 pl-12 pr-14 bg-surface-soft border border-transparent focus:border-brand/30 focus:bg-surface rounded-2xl outline-none transition-all font-semibold text-text placeholder:text-text-muted"
-                placeholder="Secure Key"
+                placeholder={smsMode ? "One-time code" : "Secure Key"}
                 required
               />
               <button
@@ -134,6 +154,31 @@ export function LoginPage() {
             )}
           </button>
         </form>
+
+        <div className="mt-4 flex items-center justify-between">
+          <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={smsMode} onChange={(e) => setSmsMode(e.target.checked)} />
+            <span className="font-medium">Sign in with SMS OTP</span>
+          </label>
+          <button
+            className="text-sm text-brand underline"
+            onClick={async () => {
+              if (!smsMode) return setSmsMode(true);
+              // send OTP
+              try {
+                setError("");
+                const phone = phoneValue.trim();
+                if (!phone) throw new Error("Enter phone number first");
+                await sendSmsOtp(phone);
+                setOtpSent(true);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            {otpSent ? "Resend OTP" : "Send OTP"}
+          </button>
+        </div>
 
         <div className="pt-8 border-t border-border flex flex-col items-center gap-6">
           <p className="text-sm font-bold text-text-muted">

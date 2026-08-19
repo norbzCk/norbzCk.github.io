@@ -159,8 +159,8 @@ app.add_middleware(
     allow_origins=_allow_origins,
     allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=[],
+    allow_headers=[],
 )
 
 

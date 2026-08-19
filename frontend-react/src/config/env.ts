@@ -17,7 +17,7 @@ function resolveDefaultApiBase() {
 
   // Railway — API on the same Railway app
   if (hostname.endsWith("railway.app")) {
-    return "https://sales-backend.up.railway.app";
+    return "https://sales-analysis-api-production.up.railway.app/";
   }
 
   // On a custom domain or deployed frontend — use the same origin

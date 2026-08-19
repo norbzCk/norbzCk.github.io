@@ -29,7 +29,7 @@ def _resolve_supabase_url() -> str:
             "ERROR: SUPABASE_DATABASE_URL is not set.\n"
             "  Get it from Supabase Dashboard → Settings → Database → "
             "Connection string → URI.\n"
-            "  Export SUPABASE_DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<REF>.supabase.co:5432/postgres",
+            "  Export SUPABASE_DATABASE_URL=postgresql://postgres:Xk5ydMQ3oxAZoJpP@db.<REF>.supabase.co:5432/postgres",
             file=sys.stderr,
         )
         sys.exit(1)

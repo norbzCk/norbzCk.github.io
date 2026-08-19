@@ -41,7 +41,7 @@ services:
       - key: APP_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: "https://norbzCk.github.io,*"
+        value: "https://norbzCk.github.io,https://sokolink-frontend.onrender.com,http://localhost:5173,http://localhost:3000"
 
 databases:
   - name: sales-db

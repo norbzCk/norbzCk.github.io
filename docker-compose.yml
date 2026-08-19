@@ -28,7 +28,8 @@ services:
       DB_PASSWORD: postgres123
       DB_NAME: sales_db
       DB_PORT: "5432"
-      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+      # Allow common local origins (Vite dev 5173, React dev 3000, docker-hosted frontend 8080)
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080
     depends_on:
       db:
         condition: service_healthy
@@ -41,7 +42,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      VITE_API_BASE: http://localhost:8000
+      # When running in docker-compose, the frontend should reach the backend by service name
+      VITE_API_BASE: http://backend:8000
     depends_on:
       - backend
     restart: unless-stopped

@@ -160,24 +160,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const trimmed = identifier.trim();
     const isEmail = trimmed.includes("@");
-    const loginPayload: { email?: string; phone?: string; password: string } = { password };
 
-    if (isEmail) {
-      loginPayload.email = trimmed.toLowerCase();
-    } else {
-      loginPayload.phone = trimmed;
+    // Supabase's password grant requires an email (not phone). If a phone
+    // identifier is provided, instruct the user to use email or fallback to
+    // the legacy app auth flow.
+    if (!isEmail) {
+      throw new Error(
+        "Phone-based login is not supported with Supabase authentication. Please sign in using your email address."
+      );
     }
 
-    const { data, error } = await supabase.auth.signInWithPassword(loginPayload);
+    const loginPayload = { email: trimmed.toLowerCase(), password };
 
-    if (error) {
-      throw error;
+    let access_token: string | undefined;
+    let userFromSupabase: any = null;
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword(loginPayload as any);
+      if (error) {
+        throw error;
+      }
+      access_token = data.session?.access_token;
+      userFromSupabase = data.user;
+    } catch (supabaseError) {
+      // Supabase auth failed (e.g., email not confirmed). Fall back to
+      // the backend app JWT login so existing app users are not locked out.
+      const trimmed = identifier.trim();
+      const isEmail = trimmed.includes("@");
+      const payload = isEmail
+        ? { email: trimmed.toLowerCase(), password }
+        : { phone: trimmed, password };
+
+      const data = await apiRequest<AuthResponse & { access_token?: string }>("/auth/login", {
+        method: "POST",
+        auth: false,
+        body: payload,
+      });
+
+      access_token = data.access_token;
+      const merged = normalizeUser(
+        { ...(data.user || {}), role: data.user?.role },
+        data.userType
+      );
+
+      if (!access_token || !merged) {
+        throw new Error("Invalid login response");
+      }
+
+      const sessionType = merged.role === "super_admin" ? "superadmin" : (data.userType || "user");
+      persistSession(access_token, merged, sessionType);
+      setUser(merged);
+      setToken(access_token);
+      return merged;
     }
 
-    const access_token = data.session?.access_token;
     if (!access_token) {
-      // Might need email verification — Supabase returns user but no session
-      if (data.user && !data.session) {
+      if (userFromSupabase && !userFromSupabase.email_confirmed_at && !userFromSupabase.confirmed_at) {
         throw new Error("Please verify your email address before signing in.");
       }
       throw new Error("No access token received from Supabase");
@@ -194,6 +232,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setUser(merged);
     return merged!;
+  }
+
+  // SMS OTP flow (Supabase)
+  async function sendSmsOtp(phone: string) {
+    if (!supabase) throw new Error("Supabase is not configured");
+    const trimmed = phone.trim();
+    const { data, error } = await supabase.auth.signInWithOtp({ phone: trimmed });
+    if (error) throw error;
+    return data;
+  }
+
+  async function verifySmsOtp(phone: string, token: string) {
+    if (!supabase) throw new Error("Supabase is not configured");
+    const trimmed = phone.trim();
+    const { data, error } = await supabase.auth.verifyOtp({ phone: trimmed, token, type: "sms" });
+    if (error) throw error;
+
+    const access_token = data.session?.access_token;
+    if (!access_token) {
+      throw new Error("No access token received after OTP verification");
+    }
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, access_token);
+    setToken(access_token);
+
+    const fetched = await apiRequest<SessionUser>("/auth/supabase/me");
+    const userType: UserType = (fetched as any).user_type || "user";
+    const merged = normalizeUser(fetched, userType);
+    if (merged) {
+      persistSession(access_token, merged, userType);
+      setUser(merged);
+    }
+    return merged;
+  }
+
+  async function loginWithPhoneLegacy(phone: string, password: string) {
+    const payload = { phone: phone.trim(), password };
+    const data = await apiRequest<{ access_token?: string; user?: SessionUser; userType?: UserType }>(
+      "/auth/login",
+      { method: "POST", auth: false, body: payload }
+    );
+
+    const token = data.access_token;
+    const merged = normalizeUser({ ...(data.user || {}), role: data.user?.role }, data.userType);
+
+    if (!token || !merged) {
+      throw new Error("Invalid login response from server");
+    }
+
+    const sessionType = merged.role === "super_admin" ? "superadmin" : (data.userType || "user");
+    persistSession(token, merged, sessionType);
+    setUser(merged);
+    setToken(token);
+    return merged;
   }
 
   async function register(payload: RegisterPayload) {
