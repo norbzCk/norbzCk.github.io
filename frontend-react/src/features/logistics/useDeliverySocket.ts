@@ -19,7 +19,7 @@ export interface LocationUpdate {
   rider_name: string;
 }
 
-export function useDeliverySocket(orderId: number | string | undefined, token: string | null) {
+export function useDeliverySocket(orderId: number | string | undefined, token: string | null, onOrderStatus?: (payload: { order_id: number; status: string; reason?: string; updated_by?: string; updated_at?: string }) => void) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [location, setLocation] = useState<LocationUpdate | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -28,6 +28,8 @@ export function useDeliverySocket(orderId: number | string | undefined, token: s
   const socketRef = useRef<WebSocket | null>(null);
   const optimisticIdRef = useRef(0);
   const typingTimeoutRef = useRef<number | null>(null);
+  const onOrderStatusRef = useRef(onOrderStatus);
+  onOrderStatusRef.current = onOrderStatus;
 
   useEffect(() => {
     if (!orderId || !token) return;
@@ -98,6 +100,14 @@ export function useDeliverySocket(orderId: number | string | undefined, token: s
         setPresence((prev) => {
           const others = prev.filter((item) => item.user !== data.user);
           return [...others, data];
+        });
+      } else if (data.type === "order_status" && typeof onOrderStatusRef.current === "function") {
+        onOrderStatusRef.current({
+          order_id: Number(data.order_id),
+          status: String(data.status || ""),
+          reason: data.reason ? String(data.reason) : undefined,
+          updated_by: data.updated_by ? String(data.updated_by) : undefined,
+          updated_at: data.updated_at ? String(data.updated_at) : undefined,
         });
       }
     };

@@ -1,6 +1,6 @@
 import secrets
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import os
 from pathlib import Path
 from typing import Optional
@@ -30,6 +30,7 @@ from backend.app.schemas import (
 )
 from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security
 from backend.app.notification_service import build_login_email, create_notification, list_notifications_for_subject, resolve_subject, serialize_notification
+from backend.app.notifications import enqueue_broadcast
 from backend.app.order_runtime import (
     ensure_order_thread,
     log_order_status,
@@ -1181,6 +1182,14 @@ def business_order_decision(
         ),
         severity="warning" if decision == "reject" else "success",
     )
+    enqueue_broadcast(background_tasks, order.id, {
+        "type": "order_status",
+        "order_id": order.id,
+        "status": order.status,
+        "reason": order.status_reason,
+        "updated_by": "seller",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
     db.commit()
     db.refresh(order)
     return {"message": "Order decision recorded", "order": _serialize_seller_orders(db, [order])[0]}
@@ -1240,6 +1249,14 @@ def business_update_order_status(
         seller_message=f"You moved order #{order.id} to {target}.",
         severity="warning" if target == "Cancelled" else "info",
     )
+    enqueue_broadcast(background_tasks, order.id, {
+        "type": "order_status",
+        "order_id": order.id,
+        "status": target,
+        "reason": reason,
+        "updated_by": "seller",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
     db.commit()
     db.refresh(order)
     return {"message": "Order status updated", "order": _serialize_seller_orders(db, [order])[0]}
@@ -1445,6 +1462,14 @@ def business_assign_delivery(
         email_body=f"Hello {logistics_name},\n\nA new delivery has been assigned to you for order #{order.id}.\n\nSokoLnk Logistics",
         background_tasks=background_tasks,
     )
+    enqueue_broadcast(background_tasks, order.id, {
+        "type": "order_status",
+        "order_id": order.id,
+        "status": "Ready For Shipping",
+        "reason": "Delivery assigned",
+        "updated_by": "seller",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
     db.commit()
     db.refresh(delivery)
     return {

@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Set
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user, get_user_from_token
@@ -84,6 +84,24 @@ class ConnectionManager:
                     self.disconnect(connection, order_id)
 
 manager = ConnectionManager()
+
+
+def _schedule_broadcast(order_id: int, payload: dict, exclude: WebSocket | None = None):
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(manager.broadcast_to_order(order_id, payload, exclude=exclude))
+
+
+def broadcast_order_status(order_id: int, payload: dict, exclude: WebSocket | None = None):
+    _schedule_broadcast(order_id, payload, exclude=exclude)
+
+
+def enqueue_broadcast(background_tasks: BackgroundTasks, order_id: int, payload: dict, exclude: WebSocket | None = None):
+    background_tasks.add_task(_schedule_broadcast, order_id, payload, exclude)
+
 
 # --- WebSocket Endpoint ---
 

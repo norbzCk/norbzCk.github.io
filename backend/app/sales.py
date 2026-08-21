@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from sqlalchemy import String, cast, func, or_
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.app.auth import get_current_user, require_roles
 from backend.app.marketplace_intelligence import build_tracking_payload, refresh_business_metrics
 from backend.app.notification_service import create_notification, resolve_subject
+from backend.app.notifications import enqueue_broadcast
 from backend.app.order_runtime import (
     ensure_order_thread,
     log_order_status,
@@ -681,6 +682,14 @@ def create_order(
             seller_message=f"You received a new order for {model.product} x{model.quantity}.",
             severity="info",
         )
+        enqueue_broadcast(background_tasks, linked_order.id, {
+            "type": "order_status",
+            "order_id": linked_order.id,
+            "status": initial_status,
+            "reason": "Order created",
+            "updated_by": "customer",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
         created_sales.append(model)
 
     db.commit()
