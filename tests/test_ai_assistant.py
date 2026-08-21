@@ -37,6 +37,7 @@ def buyer_user(db):
         password_hash=hash_password("TestPass1!"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db.add(buyer)
     db.commit()
@@ -91,6 +92,56 @@ def login_as(client, email, password):
 
 def auth_header(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+class TestGeminiProvider:
+    def test_gemini_tried_first_and_falls_back_cleanly_on_failure(self, client, db, monkeypatch):
+        """With Gemini 'configured' but failing (bad key/unreachable), the
+        request should still succeed via fallback -- never a 500/502 to the
+        end user just because one provider is down."""
+        from backend.app import ai_assistant as m
+
+        monkeypatch.setattr(m, "_gemini_client", object())  # truthy, so the Gemini path is attempted
+
+        def fake_call_gemini(*args, **kwargs):
+            raise __import__("fastapi").HTTPException(status_code=502, detail="Gemini provider unavailable: mocked failure")
+
+        monkeypatch.setattr(m, "_call_gemini", fake_call_gemini)
+
+        response = client.post("/ai/assistant", json={
+            "message": "hi there",
+            "current_path": "/",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["source"] == "fallback"
+        assert data["reply"]
+
+    def test_gemini_success_path_is_used_and_stored(self, client, db, monkeypatch):
+        from backend.app import ai_assistant as m
+
+        monkeypatch.setattr(m, "_gemini_client", object())
+
+        def fake_call_gemini(message, history, area, user_context, market_context, tool_context):
+            return "Hello! I'm the Soko-Link customer service assistant. How can I help?", "gemini-3.7-flash"
+
+        monkeypatch.setattr(m, "_call_gemini", fake_call_gemini)
+
+        response = client.post("/ai/assistant", json={
+            "message": "hi",
+            "current_path": "/",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["source"] == "gemini"
+        assert data["model"] == "gemini-3.7-flash"
+        assert "Soko-Link" in data["reply"]
+
+        # Confirm it persisted correctly and history round-trips.
+        history_response = client.get(f"/ai/assistant/history/{data['conversation_id']}")
+        assert history_response.status_code == 200
+        messages = history_response.json()["messages"]
+        assert messages[-1]["text"] == data["reply"]
 
 
 class TestAssistantReply:
@@ -189,6 +240,7 @@ class TestAssistantConversationOwnership:
             password_hash=hash_password("TestPass1!"),
             role="user",
             is_active=True,
+            is_verified=True,
         )
         db.add(other_user)
         db.commit()

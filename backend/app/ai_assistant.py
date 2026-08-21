@@ -1,6 +1,8 @@
 import json
+import logging
 import os
 import uuid
+from pathlib import Path
 from typing import Literal
 from urllib import error, request
 
@@ -24,11 +26,60 @@ from backend.models import (
     User,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/ai", tags=["AI"])
 
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+# --- Gemini customer-service provider ---
+# Uses a dedicated system prompt + knowledge base (assistant_knowledge/) written
+# specifically for customer-facing support, distinct from the general SYSTEM_PROMPT
+# below used for the OpenAI path. Tried first for guest/customer chats; falls back
+# to OpenAI, then the rule-based fallback, if unavailable.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GEMINIAI_API_KEY", "")).strip()
+# Fallback chain, most capable/newest first. Kept short and verified against
+# currently-supported models -- gemini-1.5-flash and gemini-2.0-flash are retired
+# and will 404, so don't add them back without checking they're still live.
+GEMINI_MODEL_FALLBACK = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+_ASSISTANT_KNOWLEDGE_DIR = Path(__file__).resolve().parent / "assistant_knowledge"
+_gemini_client = None
+_gemini_system_instruction: str | None = None
+
+if GEMINI_API_KEY:
+    try:
+        from google import genai as _genai
+        from google.genai import types as _genai_types
+        from google.genai.errors import APIError as _GeminiAPIError, ServerError as _GeminiServerError
+
+        _gemini_client = _genai.Client(api_key=GEMINI_API_KEY)
+    except ImportError:
+        logger.warning("GEMINI_API_KEY is set but google-genai is not installed; Gemini provider disabled.")
+        _gemini_client = None
+
+
+def _load_gemini_system_instruction() -> str:
+    global _gemini_system_instruction
+    if _gemini_system_instruction is not None:
+        return _gemini_system_instruction
+
+    instructions_path = _ASSISTANT_KNOWLEDGE_DIR / "system_instructions.md"
+    knowledge_path = _ASSISTANT_KNOWLEDGE_DIR / "company_information.md"
+    instructions = instructions_path.read_text(encoding="utf-8")
+    company_info = knowledge_path.read_text(encoding="utf-8")
+
+    _gemini_system_instruction = f"""{instructions}
+
+# COMPANY INFORMATION
+The following describes Soko-Link. Use this information when answering
+customer questions. Do not invent information that isn't contained here or
+in the LIVE PLATFORM CONTEXT provided with each message.
+
+{company_info}
+"""
+    return _gemini_system_instruction
 SYSTEM_PROMPT = """
 You are the SokoLink assistant inside a marketplace and operations platform.
 
@@ -73,7 +124,7 @@ class AssistantRequest(BaseModel):
 class AssistantResponse(BaseModel):
     conversation_id: str
     reply: str
-    source: Literal["openai", "fallback"]
+    source: Literal["gemini", "openai", "fallback"]
     model: str
 
 
@@ -504,22 +555,64 @@ def _call_openai(
     return text
 
 
-def get_ai_reply(message: str, user_context: dict = None, market_context: dict = None, tool_context: dict = None, area: str = "marketplace home") -> str:
-    """
-    Get a reply from the AI assistant without storing conversation history.
-    Used for internal calls like semantic search.
-    """
-    if user_context is None:
-        user_context = {}
-    if market_context is None:
-        market_context = _build_market_snapshot(SessionLocal())  # We'll need to adjust this
-    if tool_context is None:
-        tool_context = {}
-    
-    # We need a database session. This function should be called within a request context.
-    # For now, we'll assume it's called with a db session passed in? Let's change the approach.
-    # Instead, we'll create a helper that takes db as an argument.
-    pass
+def _call_gemini(
+    message: str,
+    history: list[AssistantHistoryItem],
+    area: str,
+    user_context: dict,
+    market_context: dict,
+    tool_context: dict,
+) -> tuple[str, str]:
+    """Stateless call to Gemini: unlike a REPL session, each HTTP request here
+    is independent, so we rebuild the conversation from stored history each
+    time rather than keeping a live `client.chats.create()` session in memory
+    (that pattern doesn't survive across requests/workers)."""
+    if not _gemini_client:
+        raise HTTPException(status_code=503, detail="Gemini provider is not configured")
+
+    system_instruction = _load_gemini_system_instruction() + "\n\n# LIVE PLATFORM CONTEXT\n" + json.dumps(
+        {
+            "current_area": area,
+            "user_context": user_context,
+            "market_context": market_context,
+            "tool_context": tool_context,
+        },
+        ensure_ascii=True,
+    )
+
+    contents = [
+        _genai_types.Content(
+            role="user" if item.role == "user" else "model",
+            parts=[_genai_types.Part(text=item.text)],
+        )
+        for item in history[-10:]
+    ]
+    contents.append(_genai_types.Content(role="user", parts=[_genai_types.Part(text=message)]))
+
+    last_error: Exception | None = None
+    for model_name in GEMINI_MODEL_FALLBACK:
+        try:
+            response = _gemini_client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=_genai_types.GenerateContentConfig(system_instruction=system_instruction),
+            )
+            text = (response.text or "").strip()
+            if not text:
+                raise ValueError("Gemini returned an empty response")
+            return text, model_name
+        except (_GeminiServerError, _GeminiAPIError, ValueError) as exc:
+            logger.warning("Gemini model %s unavailable: %s", model_name, exc)
+            last_error = exc
+            continue
+
+    raise HTTPException(status_code=502, detail=f"Gemini provider unavailable: {last_error}")
+
+
+def get_ai_reply(message: str, user_context: dict, market_context: dict, tool_context: dict, area: str = "marketplace home") -> str:
+    """Rule-based fallback reply, used when neither Gemini nor OpenAI is
+    configured or reachable. Always called with a live db-derived context
+    from the request handler below -- never invents platform facts."""
     query = message.strip().lower()
     role = str(user_context.get("role") or "guest")
     name = str(user_context.get("name") or "there")
@@ -674,6 +767,26 @@ def assistant_reply(
     _store_message(db, conversation.id, "user", payload.message)
     db.flush()
     stored_history = _conversation_history(db, conversation.id)
+
+    if _gemini_client:
+        try:
+            reply, model_used = _call_gemini(
+                payload.message, stored_history[:-1], area, user_context, market_context, tool_context
+            )
+            _store_message(db, conversation.id, "assistant", reply, source="gemini", model=model_used)
+            db.commit()
+            return AssistantResponse(
+                conversation_id=conversation.id,
+                reply=reply,
+                source="gemini",
+                model=model_used,
+            )
+        except HTTPException as exc:
+            logger.warning("Gemini provider failed, falling back: %s", exc.detail)
+            db.rollback()
+            conversation = _ensure_conversation(db, conversation.id, payload.current_path, current_user)
+            _store_message(db, conversation.id, "user", payload.message)
+            db.flush()
 
     if OPENAI_API_KEY:
         try:
