@@ -53,6 +53,18 @@ export function CheckoutPage() {
   });
 
   const [success, setSuccess] = useState<{ orderIds: number[]; transactionIds: string[] } | null>(null);
+  const [pendingMobileMoney, setPendingMobileMoney] = useState<{ transactionId: string; provider: string } | null>(null);
+
+  async function pollTransaction(transactionId: string, attempts = 20, delayMs = 3000): Promise<string> {
+    for (let i = 0; i < attempts; i++) {
+      const txn = await apiRequest<{ status: string }>(`/payments/transaction/${transactionId}`);
+      if (txn.status !== "processing" && txn.status !== "pending") {
+        return txn.status;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    return "processing"; // gave up waiting; buyer can check Payments page later
+  }
 
   const checkoutItems = useMemo(() => {
     if (!isCartCheckout) {
@@ -163,7 +175,7 @@ export function CheckoutPage() {
         const paymentKey = `${requestKey}:payment:${order.id}`;
         const amount = Number(order.total || 0);
         if (["mpesa", "airtel_money", "tigopesa"].includes(formData.payment_method)) {
-          const payResponse = await apiRequest<{ transaction_id: string }>(
+          const payResponse = await apiRequest<{ transaction_id: string; status: string }>(
             `/payments/mobile-money/stk-push?phone_number=${encodeURIComponent(formData.payment_phone)}&amount=${amount}&order_id=${order.id}&provider=${encodeURIComponent(formData.payment_method)}`,
             {
               method: "POST",
@@ -173,6 +185,18 @@ export function CheckoutPage() {
             },
           );
           transactionIds.push(payResponse.transaction_id);
+          // A real STK/USSD push doesn't complete the instant we call the API --
+          // the buyer still has to enter their PIN on their phone. Wait for the
+          // provider's webhook (surfaced via the transaction status) before we
+          // call the order paid.
+          setPendingMobileMoney({ transactionId: payResponse.transaction_id, provider: formData.payment_method });
+          const finalStatus = await pollTransaction(payResponse.transaction_id);
+          if (finalStatus === "failed") {
+            throw new Error(
+              `Your ${formData.payment_method} payment was not completed. You can retry from the Payments page.`,
+            );
+          }
+          setPendingMobileMoney(null);
         } else {
           const payResponse = await apiRequest<{ transaction_id: string }>("/payments/initiate", {
             method: "POST",
@@ -198,6 +222,7 @@ export function CheckoutPage() {
       setError(err instanceof Error ? err.message : "Failed to process order. Please try again.");
     } finally {
       setSubmitting(false);
+      setPendingMobileMoney(null);
     }
   }
 
@@ -404,7 +429,9 @@ export function CheckoutPage() {
                 {submitting ? (
                   <div className="flex items-center gap-3">
                     <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                    Processing...
+                    {pendingMobileMoney
+                      ? `Check your phone to approve the ${pendingMobileMoney.provider} prompt...`
+                      : "Processing..."}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center gap-2">
