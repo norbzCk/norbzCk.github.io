@@ -1,13 +1,17 @@
 import json
+import logging
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 from backend.app.auth import get_current_user, require_roles
 from backend.app.notification_service import create_notification, resolve_subject
+from backend.app.payment_providers import PaymentProviderError, get_provider
 from backend.app.schemas import PaymentRequest, PaymentResponse, PaymentMethod
 from backend.database import get_db
 from backend.models import BusinessUser, Order, PaymentAttempt, PaymentTransaction, Sale, User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
@@ -363,6 +367,12 @@ def stk_push_payment(
 
     transaction_id = f"STK-{uuid.uuid4().hex[:10].upper()}"
     payer_type, payer_id, _, _ = resolve_subject(current)
+
+    # Create the transaction as "processing" BEFORE calling the provider.
+    # We only ever mark a mobile-money payment "completed" from a verified
+    # provider callback (see the /webhook/* routes below) or an explicit
+    # status poll -- never immediately here, since the customer hasn't
+    # actually entered their PIN yet at this point.
     txn = PaymentTransaction(
         transaction_id=transaction_id,
         order_id=order_id,
@@ -372,51 +382,166 @@ def stk_push_payment(
         payment_method=provider,
         provider=provider,
         phone_number=phone_number,
-        status="completed",
-        message=f"STK Push completed successfully for {provider}.",
+        status="processing",
+        message=f"{provider} payment prompt sent. Waiting for customer to authorize on their phone.",
         instructions=_payment_instructions(provider),
-        confirmed_at=datetime.utcnow(),
         metadata_json=json.dumps({"channel": "stk_push"}),
     )
     db.add(txn)
     linked_order = _linked_order_model(db, order)
-    db.add(
-        PaymentAttempt(
-            order_id=linked_order.id if linked_order else None,
-            sale_id=order.id,
-            buyer_id=current.id,
-            idempotency_key=(idempotency_key or "").strip() or None,
-            amount=amount,
-            payment_method=provider,
-            provider=provider,
-            status="completed",
-            provider_reference=transaction_id,
-            message=f"STK Push completed successfully for {provider}.",
-        )
+    attempt = PaymentAttempt(
+        order_id=linked_order.id if linked_order else None,
+        sale_id=order.id,
+        buyer_id=current.id,
+        idempotency_key=(idempotency_key or "").strip() or None,
+        amount=amount,
+        payment_method=provider,
+        provider=provider,
+        status="processing",
+        provider_reference=transaction_id,
+        message=f"{provider} push sent, awaiting confirmation.",
     )
-    # Automatically progress order status after payment
-    current_status = (order.status or "").strip().title()
-    if current_status == "Pending":
-        order.status = "Confirmed"
-    elif current_status == "Confirmed":
-        order.status = "Packed"  # Auto-progress to packing after payment
-    db.add(order)
+    db.add(attempt)
+    db.commit()
+    db.refresh(txn)
+
+    # Now actually push to the real provider. transaction_id is what we ask
+    # the provider to echo back so the webhook can find this row again.
+    try:
+        provider_impl = get_provider(provider)
+        result = provider_impl.push_payment(
+            phone_number=phone_number,
+            amount=amount,
+            reference=transaction_id,
+            description=f"Order #{order.id}",
+        )
+    except PaymentProviderError as exc:
+        txn.status = "failed"
+        txn.message = f"Could not reach {provider}: {exc}"
+        attempt.status = "failed"
+        attempt.message = txn.message
+        db.add(txn)
+        db.add(attempt)
+        db.commit()
+        db.refresh(txn)
+        _notify_payment_parties(
+            db,
+            background_tasks,
+            order,
+            current,
+            title=f"Payment could not be started for order #{order.id}",
+            buyer_message=f"We couldn't start your {provider} payment for order #{order.id}: {exc}",
+            severity="warning",
+        )
+        raise HTTPException(status_code=502, detail=f"{provider} payment could not be started: {exc}") from exc
+
+    existing_meta = json.loads(txn.metadata_json or "{}")
+    existing_meta["provider_reference"] = result.provider_reference
+    txn.metadata_json = json.dumps(existing_meta)
+    db.add(txn)
+    db.commit()
+    db.refresh(txn)
 
     _notify_payment_parties(
         db,
         background_tasks,
         order,
         current,
-        title=f"Payment confirmed for order #{order.id}",
-        buyer_message=f"Your {provider} payment for order #{order.id} was confirmed successfully.",
-        seller_message=f"Payment for order #{order.id} has been confirmed via {provider}.",
+        title=f"Payment prompt sent for order #{order.id}",
+        buyer_message=f"Check your phone and enter your {provider} PIN to complete payment for order #{order.id}.",
+        seller_message=f"A {provider} payment prompt was sent to the buyer for order #{order.id}.",
         notification_type="payment",
-        severity="success",
+        severity="info",
     )
-    db.commit()
-    db.refresh(txn)
-    
+
     return _serialize_transaction(txn)
+
+
+def _find_transaction_by_provider_reference(db: Session, provider_reference: str) -> PaymentTransaction | None:
+    if not provider_reference:
+        return None
+    # We ask providers to echo our own transaction_id back as their reference,
+    # so the common case is a direct match.
+    txn = db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == provider_reference).first()
+    if txn:
+        return txn
+    # Fall back to matching on the provider_reference we stashed in metadata
+    # (covers providers that generate their own reference instead of echoing ours).
+    candidates = db.query(PaymentTransaction).filter(PaymentTransaction.status == "processing").all()
+    for candidate in candidates:
+        meta = json.loads(candidate.metadata_json or "{}")
+        if meta.get("provider_reference") == provider_reference:
+            return candidate
+    return None
+
+
+def _apply_provider_webhook(
+    db: Session,
+    background_tasks: BackgroundTasks,
+    provider_name: str,
+    webhook_result,
+) -> dict:
+    txn = _find_transaction_by_provider_reference(db, webhook_result.provider_reference)
+    if not txn:
+        logger.warning("Received %s webhook for unknown reference %s", provider_name, webhook_result.provider_reference)
+        # Return 200 anyway -- providers retry aggressively on non-2xx, and we
+        # have nothing useful to do with a reference we don't recognize.
+        return {"status": "ignored", "reason": "unknown reference"}
+
+    if txn.status not in {"processing", "pending"}:
+        # Already resolved (e.g. a duplicate/retried callback) -- don't re-notify.
+        return {"status": "already_processed", "transaction_status": txn.status}
+
+    order = db.query(Sale).filter(Sale.id == txn.order_id).first()
+
+    txn.status = webhook_result.status
+    txn.message = webhook_result.message
+    if webhook_result.status == "completed":
+        txn.confirmed_at = datetime.utcnow()
+    meta = json.loads(txn.metadata_json or "{}")
+    meta["provider_receipt"] = webhook_result.provider_receipt
+    txn.metadata_json = json.dumps(meta)
+    db.add(txn)
+
+    linked_order = _linked_order_model(db, order) if order else None
+    db.add(
+        PaymentAttempt(
+            order_id=linked_order.id if linked_order else None,
+            sale_id=txn.order_id,
+            buyer_id=txn.payer_id if txn.payer_type == "user" else None,
+            amount=float(txn.amount or 0),
+            payment_method=txn.payment_method,
+            provider=txn.provider,
+            status=webhook_result.status,
+            provider_reference=txn.transaction_id,
+            message=webhook_result.message,
+        )
+    )
+
+    if order and webhook_result.status == "completed":
+        current_status = (order.status or "").strip().title()
+        if current_status == "Pending":
+            order.status = "Confirmed"
+        elif current_status == "Confirmed":
+            order.status = "Packed"
+        db.add(order)
+
+    buyer = db.query(User).filter(User.id == txn.payer_id).first() if order and txn.payer_type == "user" else None
+    if order and buyer:
+        _notify_payment_parties(
+            db,
+            background_tasks,
+            order,
+            buyer,
+            title=f"Payment {webhook_result.status} for order #{order.id}",
+            buyer_message=f"Your {provider_name} payment for order #{order.id} is now {webhook_result.status}.",
+            seller_message=f"Payment for order #{order.id} via {provider_name} is now {webhook_result.status}.",
+            notification_type="payment",
+            severity="success" if webhook_result.status == "completed" else "warning",
+        )
+
+    db.commit()
+    return {"status": "processed", "transaction_id": txn.transaction_id, "transaction_status": txn.status}
 
 
 @router.get("/transaction/{transaction_id}")
@@ -531,7 +656,92 @@ def get_payment_history(
 
 
 @router.post("/webhook/mpesa")
-def mpesa_webhook(
+async def mpesa_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    return {"status": "received"}
+    """Vodacom M-Pesa Open API async callback. Register this exact URL as
+    your app's "Response URL" in the M-Pesa Open API developer portal."""
+    body = await request.body()
+    try:
+        result = get_provider("mpesa").parse_webhook(dict(request.headers), body)
+    except PaymentProviderError as exc:
+        logger.warning("Rejected M-Pesa webhook: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    outcome = _apply_provider_webhook(db, background_tasks, "M-Pesa", result)
+    # Vodacom just needs a 200; body content isn't inspected by them.
+    return {"ack": "received", "result": outcome}
+
+
+@router.post("/webhook/airtel")
+async def airtel_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Airtel Money collections callback (only fires if enabled for your
+    merchant account -- see payment_providers/airtel_service.py for the
+    polling fallback if callbacks aren't enabled for you)."""
+    body = await request.body()
+    try:
+        result = get_provider("airtel_money").parse_webhook(dict(request.headers), body)
+    except PaymentProviderError as exc:
+        logger.warning("Rejected Airtel Money webhook: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    outcome = _apply_provider_webhook(db, background_tasks, "Airtel Money", result)
+    return {"ack": "received", "result": outcome}
+
+
+@router.post("/webhook/tigopesa")
+async def tigopesa_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Callback from whichever aggregator (Selcom/ClickPesa/DPO/AzamPay) you
+    route Tigo Pesa through. Register this URL with them."""
+    body = await request.body()
+    try:
+        result = get_provider("tigopesa").parse_webhook(dict(request.headers), body)
+    except PaymentProviderError as exc:
+        logger.warning("Rejected Tigo Pesa webhook: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    outcome = _apply_provider_webhook(db, background_tasks, "Tigo Pesa", result)
+    return {"ack": "received", "result": outcome}
+
+
+@router.post("/mobile-money/{provider}/poll/{transaction_id}")
+def poll_mobile_money_status(
+    provider: str,
+    transaction_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Manual/scheduled fallback for providers (Airtel Money in particular)
+    that don't reliably deliver webhooks for every merchant account. Safe to
+    call repeatedly -- it's a no-op once the transaction is resolved."""
+    txn = db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == transaction_id).first()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if txn.status not in {"processing", "pending"}:
+        return _serialize_transaction(txn)
+
+    provider_impl = get_provider(provider)
+    if not hasattr(provider_impl, "poll_status"):
+        raise HTTPException(status_code=400, detail=f"{provider} does not support status polling; wait for the webhook.")
+
+    meta = json.loads(txn.metadata_json or "{}")
+    provider_reference = meta.get("provider_reference") or transaction_id
+    try:
+        result = provider_impl.poll_status(provider_reference)
+    except PaymentProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if result.status == "pending":
+        return _serialize_transaction(txn)
+
+    _apply_provider_webhook(db, background_tasks, provider, result)
+    db.refresh(txn)
+    return _serialize_transaction(txn)

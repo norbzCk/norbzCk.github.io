@@ -37,6 +37,7 @@ def buyer_user(db):
         password_hash=hash_password("TestPass1!"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db.add(buyer)
     db.commit()
@@ -172,6 +173,7 @@ class TestInitiatePayment:
             password_hash=hash_password("TestPass1!"),
             role="user",
             is_active=True,
+            is_verified=True,
         )
         db.add(other_buyer)
         db.commit()
@@ -232,7 +234,9 @@ class TestInitiatePayment:
 
 
 class TestSTKPushPayment:
-    def test_stk_push_payment(self, client, db, buyer_user, product, seller_user):
+    def test_stk_push_without_provider_credentials_fails_safely(self, client, db, buyer_user, product, seller_user):
+        """With no real M-Pesa credentials configured (the default in tests/dev),
+        the push must fail loudly rather than pretend the customer paid."""
         sale = Sale(
             date=date.today(),
             product=product.name,
@@ -256,10 +260,81 @@ class TestSTKPushPayment:
             "amount": 10000.0,
             "order_id": sale.id,
         }, headers=auth_header(token))
-        assert response.status_code == 200
-        data = response.json()
-        assert "transaction_id" in data
-        assert data["status"] == "completed"
+        assert response.status_code == 502
+
+        # The transaction row should exist and be marked failed, not silently dropped.
+        txn = db.query(PaymentTransaction).filter(PaymentTransaction.order_id == sale.id).first()
+        assert txn is not None
+        assert txn.status == "failed"
+
+    def test_stk_push_then_webhook_completes_payment(self, client, db, buyer_user, product, seller_user, monkeypatch):
+        """End-to-end: push succeeds (mocked provider) -> stays 'processing' ->
+        webhook confirms -> transaction and order both flip to completed/Confirmed."""
+        from backend.app.payment_providers import base as provider_base
+        from backend.app.payment_providers import mpesa_service
+
+        def fake_push_payment(self, *, phone_number, amount, reference, description):
+            return provider_base.PushResult(accepted=True, provider_reference=reference, raw_response={"ok": True})
+
+        def fake_parse_webhook(self, headers, body):
+            import json
+            payload = json.loads(body)
+            return provider_base.WebhookResult(
+                provider_reference=payload["input_TransactionReference"],
+                our_transaction_id=None,
+                status="completed",
+                provider_receipt="MPESA-RECEIPT-1",
+                message="Payment confirmed",
+                raw_payload=payload,
+            )
+
+        monkeypatch.setattr(mpesa_service.MpesaProvider, "push_payment", fake_push_payment)
+        monkeypatch.setattr(mpesa_service.MpesaProvider, "parse_webhook", fake_parse_webhook)
+
+        sale = Sale(
+            date=date.today(),
+            product=product.name,
+            category=product.category,
+            product_id=product.id,
+            seller_id=seller_user.id,
+            quantity=2,
+            unit_price=product.price,
+            status="Pending",
+            created_by=buyer_user.id,
+        )
+        db.add(sale)
+        db.commit()
+        db.refresh(sale)
+
+        login = login_as(client, "buyer@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        push_response = client.post("/payments/mobile-money/stk-push", params={
+            "phone_number": "+255700000300",
+            "amount": 10000.0,
+            "order_id": sale.id,
+        }, headers=auth_header(token))
+        assert push_response.status_code == 200
+        push_data = push_response.json()
+        assert push_data["status"] == "processing"
+        transaction_id = push_data["transaction_id"]
+
+        webhook_response = client.post(
+            "/payments/webhook/mpesa",
+            content=__import__("json").dumps({
+                "input_TransactionReference": transaction_id,
+                "output_ResponseCode": "INS-0",
+            }),
+        )
+        assert webhook_response.status_code == 200
+        assert webhook_response.json()["ack"] == "received"
+        assert webhook_response.json()["result"]["transaction_status"] == "completed"
+
+        db.expire_all()
+        txn = db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == transaction_id).first()
+        assert txn.status == "completed"
+        sale_after = db.query(Sale).filter(Sale.id == sale.id).first()
+        assert sale_after.status == "Confirmed"
 
     def test_stk_push_invalid_provider(self, client, db, buyer_user, product, seller_user):
         sale = Sale(
@@ -298,6 +373,7 @@ class TestConfirmTransaction:
             password_hash=hash_password("AdminPass1!"),
             role="super_admin",
             is_active=True,
+            is_verified=True,
         )
         db.add(admin)
         db.commit()
@@ -383,6 +459,7 @@ class TestConfirmTransaction:
             password_hash=hash_password("AdminPass1!"),
             role="super_admin",
             is_active=True,
+            is_verified=True,
         )
         db.add(admin)
         db.commit()
@@ -485,10 +562,15 @@ class TestPaymentHistory:
 
 
 class TestMpesaWebhook:
-    def test_mpesa_webhook_placeholder(self, client, db):
+    def test_mpesa_webhook_with_unknown_reference_is_acked_but_ignored(self, client, db):
+        """Providers retry aggressively on non-2xx, so an unrecognized callback
+        (e.g. a stale/duplicate one) should still get a 200 -- just marked ignored
+        rather than mistakenly applied to some transaction."""
         response = client.post("/payments/webhook/mpesa")
         assert response.status_code == 200
-        assert response.json()["status"] == "received"
+        body = response.json()
+        assert body["ack"] == "received"
+        assert body["result"]["status"] == "ignored"
 
 
 class TestPaymentMethods:

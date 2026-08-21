@@ -145,7 +145,7 @@ function SellerOrdersBoard() {
       const response = await apiRequest<{ items: Order[] }>("/business/orders");
       return response.items || [];
     },
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: logisticsOptions = [] } = useQuery({
@@ -226,7 +226,16 @@ function SellerOrdersBoard() {
     location: liveLoc,
     isConnected,
     isOtherPartyTyping,
-  } = useDeliverySocket(activeOrder?.id, token);
+  } = useDeliverySocket(
+    activeOrder?.id,
+    token,
+    (statusUpdate) => {
+      if (statusUpdate.order_id) {
+        void queryClient.invalidateQueries({ queryKey: ["seller-orders"] });
+        void queryClient.invalidateQueries({ queryKey: ["seller-logistics-options"] });
+      }
+    },
+  );
 
   const acceptRejectMutation = useMutation({
     mutationFn: async ({
@@ -724,6 +733,7 @@ function SellerOrdersBoard() {
 function CustomerOrdersView() {
   const { user } = useAuth();
   const token = getStoredToken();
+  const queryClient = useQueryClient();
   const [activeOrderId, setActiveOrderId] = useState<number | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const { data: orders = [], isLoading, error } = useQuery({
@@ -732,12 +742,21 @@ function CustomerOrdersView() {
       const response = await apiRequest<Order[]>("/orders/");
       return Array.isArray(response) ? response : [];
     },
+    refetchInterval: 15000,
   });
   const activeOrder = useMemo(
     () => orders.find((order) => order.id === activeOrderId) || null,
     [activeOrderId, orders],
   );
-  const { messages, sendChat, sendTyping, isConnected, isOtherPartyTyping } = useDeliverySocket(activeOrder?.id, token);
+  const { messages, sendChat, sendTyping, isConnected, isOtherPartyTyping } = useDeliverySocket(
+    activeOrder?.id,
+    token,
+    (statusUpdate) => {
+      if (statusUpdate.order_id) {
+        void queryClient.invalidateQueries({ queryKey: ["customer-orders"] });
+      }
+    },
+  );
 
   if (isLoading) {
     return (
