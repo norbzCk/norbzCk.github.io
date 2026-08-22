@@ -5,6 +5,7 @@ from backend.app.main import app
 from backend.database import SessionLocal, engine
 from backend.models import Base
 from backend.models import User, BusinessUser, Product, Provider, Sale, BusinessMetrics, AssistantConversation, AssistantConversationMessage
+from backend.app.ai_assistant import AssistantHistoryItem
 from backend.app.auth import hash_password
 from datetime import date
 
@@ -260,3 +261,21 @@ class TestAssistantConversationOwnership:
 
         response = client.get("/ai/assistant/history/other-conv-123", headers=auth_header(token))
         assert response.status_code == 403
+
+
+def test_prompt_history_ignores_welcome_and_route_noise():
+    from backend.app import ai_assistant as m
+
+    history = [
+        AssistantHistoryItem(role="assistant", text="I’m your SokoLink assistant. I’m available throughout the app to help with products, orders, account tasks, and the next step whenever you need support."),
+        AssistantHistoryItem(role="assistant", text="You’re now in the products page. I’ll keep my help focused on what matters here."),
+        AssistantHistoryItem(role="user", text="Where is my order?"),
+        AssistantHistoryItem(role="assistant", text="Your most recent order is in transit."),
+    ]
+
+    filtered = m._filter_prompt_history(history)
+
+    assert filtered == [
+        AssistantHistoryItem(role="user", text="Where is my order?"),
+        AssistantHistoryItem(role="assistant", text="Your most recent order is in transit."),
+    ]

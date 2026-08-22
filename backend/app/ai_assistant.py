@@ -771,6 +771,29 @@ def _store_message(
     )
 
 
+def _is_noise_assistant_message(text: str) -> bool:
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return False
+    welcome_markers = (
+        "I’m your SokoLink assistant",
+        "I'm your SokoLink assistant",
+        "I’m here with you",
+        "I'm here with you",
+    )
+    route_markers = (
+        "You’re now in the",
+        "You're now in the",
+        "I’ll keep my help focused on what matters here",
+        "I'll keep my help focused on what matters here",
+    )
+    return any(marker in cleaned for marker in welcome_markers) or any(marker in cleaned for marker in route_markers)
+
+
+def _filter_prompt_history(history: list[AssistantHistoryItem]) -> list[AssistantHistoryItem]:
+    return [item for item in history if not _is_noise_assistant_message(item.text)]
+
+
 def _conversation_history(
     db: Session,
     conversation_id: str,
@@ -781,7 +804,7 @@ def _conversation_history(
         .order_by(AssistantConversationMessage.created_at.asc(), AssistantConversationMessage.id.asc())
         .all()
     )
-    return [AssistantHistoryItem(role=item.role, text=item.text) for item in items]
+    return _filter_prompt_history([AssistantHistoryItem(role=item.role, text=item.text) for item in items])
 
 
 @router.post("/assistant", response_model=AssistantResponse)
@@ -798,7 +821,7 @@ def assistant_reply(
 
     _store_message(db, conversation.id, "user", payload.message)
     db.flush()
-    stored_history = _conversation_history(db, conversation.id)
+    stored_history = _filter_prompt_history(_conversation_history(db, conversation.id))
 
     if _gemini_client:
         try:
