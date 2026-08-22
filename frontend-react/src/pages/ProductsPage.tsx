@@ -13,6 +13,7 @@ import {
   ArrowUpDown,
   Trash2,
   Edit2,
+  RotateCcw,
   Plus,
   ChevronRight,
   TrendingUp,
@@ -331,13 +332,23 @@ export function ProductsPage() {
   }
 
   async function handleDelete(id: number) {
-    if (!window.confirm("Are you sure you want to delete this product?")) return;
+    if (!window.confirm("Are you sure you want to delete this product? You can restore it later from your inventory.")) return;
     try {
       await apiRequest(`/products/${id}`, { method: "DELETE" });
       await load();
       setFlash("Product deleted.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete product");
+    }
+  }
+
+  async function handleReactivate(id: number) {
+    try {
+      await apiRequest(`/products/${id}/reactivate`, { method: "POST" });
+      await load();
+      setFlash("Product restored and listed again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to restore product");
     }
   }
 
@@ -715,6 +726,11 @@ export function ProductsPage() {
                       <span className="rounded-full border border-white/50 bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-text shadow-sm backdrop-blur-md">
                         {product.category || "General"}
                       </span>
+                      {product.is_active === false && (
+                        <span className="flex items-center gap-1.5 rounded-full bg-slate-700/90 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm backdrop-blur-md">
+                          Deactivated
+                        </span>
+                      )}
                       {product.stock && product.stock <= 5 && (
                         <span className="flex items-center gap-1.5 rounded-full bg-danger/90 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm backdrop-blur-md">
                           <AlertTriangle size={12} /> Low Stock
@@ -729,12 +745,22 @@ export function ProductsPage() {
                         >
                           <Edit2 size={16} />
                         </button>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleDelete(product.id); }}
-                          className="h-10 w-10 rounded-xl bg-white/90 backdrop-blur-md text-danger hover:bg-danger hover:text-white transition-all shadow-lg flex items-center justify-center border border-white/50"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {product.is_active === false ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleReactivate(product.id); }}
+                            className="h-10 w-10 rounded-xl bg-white/90 backdrop-blur-md text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all shadow-lg flex items-center justify-center border border-white/50"
+                            title="Restore product"
+                          >
+                            <RotateCcw size={16} />
+                          </button>
+                        ) : (
+                          <button onClick={(e) => { e.stopPropagation(); handleDelete(product.id); }}
+                            className="h-10 w-10 rounded-xl bg-white/90 backdrop-blur-md text-danger hover:bg-danger hover:text-white transition-all shadow-lg flex items-center justify-center border border-white/50"
+                            title="Delete product"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

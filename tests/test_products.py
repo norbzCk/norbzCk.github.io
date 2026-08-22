@@ -37,6 +37,7 @@ def admin_user(db):
         password_hash=hash_password("AdminPass1!"),
         role="super_admin",
         is_active=True,
+        is_verified=True,
     )
     db.add(admin)
     db.commit()
@@ -77,6 +78,7 @@ def buyer_user(db):
         password_hash=hash_password("TestPass1!"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db.add(buyer)
     db.commit()
@@ -178,6 +180,48 @@ class TestProductCreate:
             "category": "Groceries",
             "price": -100.0,
             "stock": 50,
+            "description": "A product with an invalid price.",
+        }, headers=auth_header(token))
+        assert response.status_code == 422
+
+    def test_seller_create_product_negative_stock(self, client, db, seller_user):
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        response = client.post("/products/", json={
+            "name": "Bad Stock Product",
+            "category": "Groceries",
+            "price": 100.0,
+            "stock": -5,
+            "description": "A product with invalid stock.",
+        }, headers=auth_header(token))
+        assert response.status_code == 422
+
+    def test_seller_create_product_zero_stock_is_valid(self, client, db, seller_user):
+        """Zero stock (out of stock, but still a real listing) must NOT be
+        rejected -- only negative stock is invalid."""
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        response = client.post("/products/", json={
+            "name": "Out of Stock Product",
+            "category": "Groceries",
+            "price": 100.0,
+            "stock": 0,
+            "description": "Currently out of stock.",
+        }, headers=auth_header(token))
+        assert response.status_code == 201
+
+    def test_seller_create_product_whitespace_only_name(self, client, db, seller_user):
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        response = client.post("/products/", json={
+            "name": "   ",
+            "category": "Groceries",
+            "price": 100.0,
+            "stock": 5,
+            "description": "A product with a blank name.",
         }, headers=auth_header(token))
         assert response.status_code == 422
 
@@ -285,6 +329,74 @@ class TestProductDelete:
         db.expire_all()
         updated = db.query(Product).filter(Product.id == product.id).first()
         assert updated.is_active is False
+
+    def test_deactivated_product_still_visible_to_owner(self, client, db, seller_user, product):
+        """Regression test: GET /products/ (the seller's own management view)
+        used to filter out inactive products with the same is_active check as
+        the public marketplace, so deleting a product made it vanish from the
+        seller's own dashboard with no way to find or restore it."""
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        client.delete(f"/products/{product.id}", headers=auth_header(token))
+
+        response = client.get("/products/", headers=auth_header(token))
+        assert response.status_code == 200
+        ids = [item["id"] for item in response.json()]
+        assert product.id in ids
+
+    def test_deactivated_product_hidden_from_marketplace(self, client, db, seller_user, product):
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+        client.delete(f"/products/{product.id}", headers=auth_header(token))
+
+        response = client.get("/products/marketplace")
+        assert response.status_code == 200
+        data = response.json()
+        items = data.get("items", data) if isinstance(data, dict) else data
+        assert product.id not in [item["id"] for item in items]
+
+
+class TestProductReactivate:
+    def test_seller_reactivates_own_product(self, client, db, seller_user, product):
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        client.delete(f"/products/{product.id}", headers=auth_header(token))
+        response = client.post(f"/products/{product.id}/reactivate", headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["product"]["is_active"] is True
+
+        db.expire_all()
+        updated = db.query(Product).filter(Product.id == product.id).first()
+        assert updated.is_active is True
+
+    def test_seller_cannot_reactivate_other_sellers_product(self, client, db, seller_user, product):
+        from backend.models import BusinessUser
+        from backend.app.auth import hash_password
+
+        rival = BusinessUser(
+            business_name="Rival Co",
+            owner_name="Rival Owner",
+            email="rival_reactivate@test.com",
+            phone="+255700000850",
+            password_hash=hash_password("RivalPass1!"),
+            role="seller",
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(rival)
+        db.commit()
+
+        owner_login = login_as(client, "seller@test.com", "TestPass1!")
+        owner_token = owner_login.json()["access_token"]
+        client.delete(f"/products/{product.id}", headers=auth_header(owner_token))
+
+        rival_login = client.post("/auth/login", json={"email": "rival_reactivate@test.com", "password": "RivalPass1!"})
+        rival_token = rival_login.json()["access_token"]
+
+        response = client.post(f"/products/{product.id}/reactivate", headers=auth_header(rival_token))
+        assert response.status_code == 403
 
 
 class TestProductSearch:

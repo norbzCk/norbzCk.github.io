@@ -5,6 +5,7 @@ import { apiRequest } from "../../lib/http";
 import type { AuthResponse, SessionUser, UserType } from "../../types/auth";
 import {
   clearStoredSession,
+  getStoredToken,
   getStoredUser,
   getStoredUserType,
   normalizeUser,

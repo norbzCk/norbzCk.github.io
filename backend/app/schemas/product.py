@@ -1,7 +1,7 @@
 #This defines the schema for creating a new product, you only pass what is needed to be created(product by user)(not the id, it made bugs here)
 #pydantic checks for correct data types and required fields
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class AISuggestRequest(BaseModel):
     name: str
@@ -21,14 +21,24 @@ class AISuggestResponse(BaseModel):
     demand_level: str | None = None
 
 class ProductCreate(BaseModel):
-    name: str
-    category: str
-    price: float
-    stock: int
-    description: str
+    name: str = Field(..., min_length=1, max_length=200)
+    category: str = Field(..., min_length=1, max_length=100)
+    price: float = Field(..., gt=0, description="Must be a positive price")
+    stock: int = Field(..., ge=0, description="Zero is valid (out of stock); negative is not")
+    description: str = Field(..., min_length=1, max_length=5000)
     image_url: str | None = None
     provider_id: int | None = None
     seller_id: int | None = None
+
+    @field_validator("name", "category", "description")
+    @classmethod
+    def _reject_blank_after_strip(cls, value: str) -> str:
+        # min_length=1 alone doesn't catch "   " (whitespace-only input),
+        # which was previously accepted and produced garbage listings.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 class ProductSearchQuery(BaseModel):

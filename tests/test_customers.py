@@ -36,6 +36,7 @@ def admin_user(db):
         password_hash=hash_password("AdminPass1!"),
         role="super_admin",
         is_active=True,
+        is_verified=True,
     )
     db.add(admin)
     db.commit()
@@ -60,6 +61,7 @@ class TestListCustomers:
             password_hash=hash_password("TestPass1!"),
             role="user",
             is_active=True,
+            is_verified=True,
         )
         db.add(customer)
         db.commit()
@@ -122,6 +124,7 @@ class TestCreateCustomer:
             password_hash=hash_password("TestPass1!"),
             role="user",
             is_active=True,
+            is_verified=True,
         )
         db.add(existing)
         db.commit()
@@ -160,6 +163,7 @@ class TestDeleteCustomer:
             password_hash=hash_password("TestPass1!"),
             role="user",
             is_active=True,
+            is_verified=True,
         )
         db.add(customer)
         db.commit()
