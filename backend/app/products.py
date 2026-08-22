@@ -106,6 +106,10 @@ def _is_seller(current: User | BusinessUser) -> bool:
     return str(getattr(current, "role", "")).strip().lower() == "seller"
 
 
+def _is_admin(current: User | BusinessUser) -> bool:
+    return str(getattr(current, "role", "")).strip().lower() in {"admin", "super_admin", "owner"}
+
+
 def _ensure_product_owner(product: Product, current: User | BusinessUser):
     if not _is_seller(current):
         return
@@ -143,9 +147,19 @@ def get_products(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    query = db.query(Product).filter(Product.is_active.isnot(False))
+    """Seller/admin management view -- unlike /marketplace and /public, this
+    intentionally does NOT hide inactive (soft-deleted) products: a seller
+    managing their own catalog needs to see deactivated items to reactivate
+    them, not have them disappear. Only customer-facing endpoints filter by
+    is_active."""
+    query = db.query(Product)
     if _is_seller(current):
         query = query.filter(Product.seller_id == current.id)
+    elif not _is_admin(current):
+        # A plain customer role hitting this management endpoint (shouldn't
+        # normally happen from the frontend, but don't leak inactive
+        # products to them if it does).
+        query = query.filter(Product.is_active.isnot(False))
     products = query.order_by(Product.id.desc()).all()
     providers = {p.id: p for p in db.query(Provider).all()}
     sellers = {s.id: s for s in db.query(BusinessUser).all()}
@@ -367,6 +381,33 @@ def delete_product(
     db.add(product)
     db.commit()
     return {"message": "Product deactivated", "product_id": product_id}
+
+
+@router.post("/{product_id}/reactivate")
+def reactivate_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles("seller", "admin", "super_admin", "owner")),
+):
+    """Undo a soft-delete. Without this, a seller who deletes a product by
+    mistake (or wants to re-list something seasonally) has no way back --
+    ProductCreate/update_product never touch is_active, so this was a dead
+    end before."""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    _ensure_product_owner(product, current)
+    product.is_active = True
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+
+    provider = db.query(Provider).filter(Provider.id == product.provider_id).first() if product.provider_id else None
+    seller = db.query(BusinessUser).filter(BusinessUser.id == product.seller_id).first() if product.seller_id else None
+    return {
+        "message": "Product reactivated",
+        "product": _serialize_product(db, product, provider, seller),
+    }
 
 @router.put("/{product_id}")
 def update_product(
