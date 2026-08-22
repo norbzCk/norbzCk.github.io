@@ -106,7 +106,7 @@ def _write_revenue_product_graph(points: list[dict[str, Any]], user) -> str | No
     positions = list(range(len(values)))
     
     # Use a subtle blue for the bars
-    bars = ax.bar(positions, values, color=primary_color, alpha=0.85, width=0.6, borderpad=0)
+    bars = ax.bar(positions, values, color=primary_color, alpha=0.85, width=0.6)
     
     ax.set_title("Asset Performance Analysis", fontsize=14, fontweight="black", loc="left", color="#0f172a", pad=20)
     ax.set_ylabel("Total Revenue (TZS)", color=text_color, fontsize=10, fontweight="bold")

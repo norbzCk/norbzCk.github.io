@@ -37,6 +37,7 @@ def admin_user(db):
         password_hash=hash_password("AdminPass1!"),
         role="super_admin",
         is_active=True,
+        is_verified=True,
     )
     db.add(admin)
     db.commit()
@@ -53,6 +54,7 @@ def buyer_user(db):
         password_hash=hash_password("TestPass1!"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db.add(buyer)
     db.commit()

@@ -146,21 +146,36 @@ def _parse_cors_origins() -> list[str]:
     origins = [o.strip() for o in raw.split(",") if o.strip()]
     if not origins:
         origins = [origin.replace("+origin", "") for origin in [os.environ.get("FRONTEND_URL", "")] if origin]
+    if not origins:
+        # Sensible default for local development ONLY -- explicit CORS_ORIGINS
+        # should always be set in staging/production. Previously an empty
+        # config here fell through to a regex matching *any* http(s) origin
+        # combined with allow_credentials=True, which is an open CORS hole
+        # (any website could make authenticated requests against this API
+        # on a user's behalf). Default to known local dev ports instead.
+        origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
     return origins
 
 
 _cors_origins = _parse_cors_origins()
-_has_wildcard = "*" in _cors_origins or not _cors_origins
-_allow_origins = [o for o in _cors_origins if o != "*"] if not _has_wildcard else ["*"]
-_allow_origin_regex = r"https?://.*" if _has_wildcard else None
+# A literal "*" needs special handling: browsers reject "Access-Control-Allow-Origin: *"
+# on a credentialed request, so Starlette must echo back the actual request's Origin
+# instead. allow_origin_regex does that. Only take this path on an EXPLICIT "*" in
+# CORS_ORIGINS -- not as the unset/default case (see _parse_cors_origins above).
+_explicit_wildcard = "*" in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allow_origins,
-    allow_origin_regex=_allow_origin_regex,
+    allow_origins=[] if _explicit_wildcard else _cors_origins,
+    allow_origin_regex=r"https?://.*" if _explicit_wildcard else None,
     allow_credentials=True,
-    allow_methods=[],
-    allow_headers=[],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 

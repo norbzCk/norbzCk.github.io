@@ -35,6 +35,7 @@ def test_user(db_session):
         password_hash="hashed_password",
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()

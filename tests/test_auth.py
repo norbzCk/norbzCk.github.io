@@ -424,6 +424,7 @@ class TestListUsers:
             password_hash=hash_password("AdminPass1!"),
             role="super_admin",
             is_active=True,
+            is_verified=True,
         )
         db.add(admin)
         db.commit()
@@ -451,6 +452,7 @@ class TestCreateUser:
             password_hash=hash_password("AdminPass1!"),
             role="super_admin",
             is_active=True,
+            is_verified=True,
         )
         db.add(admin)
         db.commit()
