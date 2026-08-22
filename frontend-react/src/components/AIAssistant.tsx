@@ -28,8 +28,12 @@ export function AIAssistant({ isOpen, isReplying = false, onToggle, messages, on
   return (
     <>
       {isOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end md:items-center justify-center" onClick={onToggle}>
-          <div className="bg-white dark:bg-slate-800 w-full md:w-[480px] md:rounded-2xl shadow-2xl flex flex-col max-h-[80vh] md:max-h-[600px]" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed bottom-24 right-4 left-4 sm:left-auto z-50 flex justify-end sm:right-6"
+          role="dialog"
+          aria-label="AI Assistant"
+        >
+          <div className="bg-white dark:bg-slate-800 w-full sm:w-[420px] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col max-h-[70vh] sm:max-h-[600px] overflow-hidden">
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center text-xl">🤖</div>

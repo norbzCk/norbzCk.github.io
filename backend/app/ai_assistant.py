@@ -570,7 +570,17 @@ def _call_gemini(
     if not _gemini_client:
         raise HTTPException(status_code=503, detail="Gemini provider is not configured")
 
-    system_instruction = _load_gemini_system_instruction() + "\n\n# LIVE PLATFORM CONTEXT\n" + json.dumps(
+    system_instruction = _load_gemini_system_instruction() + (
+        "\n\n# LIVE PLATFORM CONTEXT\n"
+        "The knowledge base above tells you to 'use tools' for product and order "
+        "lookups. There is no separate tool-calling step in this integration -- "
+        "the JSON below IS that tool output, already retrieved for you for this "
+        "exact message. Treat it as the live, authoritative platform data the "
+        "knowledge base refers to. If a field you need isn't present here (e.g. "
+        "no matching product, no recent orders), that means the lookup genuinely "
+        "found nothing -- say so plainly rather than guessing or claiming to "
+        "check again.\n"
+    ) + json.dumps(
         {
             "current_area": area,
             "user_context": user_context,
@@ -611,62 +621,84 @@ def _call_gemini(
 
 def get_ai_reply(message: str, user_context: dict, market_context: dict, tool_context: dict, area: str = "marketplace home") -> str:
     """Rule-based fallback reply, used when neither Gemini nor OpenAI is
-    configured or reachable. Always called with a live db-derived context
-    from the request handler below -- never invents platform facts."""
+    configured or reachable.
+
+    IMPORTANT: this must answer the person's actual question directly. It
+    previously always responded in a "here's how you should reply to the
+    customer" coaching voice -- reasonable for a staff member explicitly
+    asking for reply wording, completely wrong for a customer who just
+    asked "where's my order" and got told how someone else should answer
+    them. That mismatch is what made fallback replies look broken/
+    nonsensical. Grounded in the same knowledge base doc used by the
+    Gemini path plus live db-derived context -- never invents platform
+    facts."""
     query = message.strip().lower()
     role = str(user_context.get("role") or "guest")
     name = str(user_context.get("name") or "there")
+    is_staff = role in {"seller", "logistics", "admin", "super_admin", "owner"}
+
+    # Only staff explicitly asking for reply wording get the coaching voice --
+    # this was previously the behavior for every single message.
+    if is_staff and any(phrase in query for phrase in ["what to reply", "how to reply", "how should i respond", "draft a reply"]):
+        return (
+            f"Here's a reply you can use: \"I've checked this and the next step is to confirm the key details first so I can help you correctly.\" "
+            "Tell me the exact message or situation and I'll tailor the wording."
+        )
 
     if any(word in query for word in ["hello", "hi", "hey", "mambo", "habari"]):
-        return f"I’m here with you, {name}. Ask me about products, orders, deliveries, account settings, or the next step in the {area}, and I’ll keep it practical."
-
-    if any(word in query for word in ["what to reply", "how to reply", "reply", "respond"]):
-        return (
-            f"Here is a supportive reply you can use: \"I’m on it. I’ve checked the {area}, and the next best step is to confirm the key details first so I can guide you correctly.\" "
-            "If you want, tell me the exact message or situation and I’ll rewrite the reply in a more customer-facing way."
-        )
+        return f"Hi {name}! I'm the Soko-Link assistant. Ask me about products, your orders, deliveries, payments, or your account, and I'll help directly."
 
     if any(word in query for word in ["product", "catalog", "find", "search", "recommend"]):
         matched_products = tool_context.get("matched_products") or []
         if matched_products:
             preview = ", ".join(f"{item['name']} (TZS {item['price']:,.0f})" for item in matched_products[:3])
-            return (
-                f"I found some relevant products for you in the {area}: {preview}. "
-                "If you want, I can help turn that into a cleaner customer reply or suggest which one to check first."
-            )
+            return f"Here's what I found: {preview}. Want more detail on any of these, or a different category?"
         top_categories = market_context.get("top_categories") or []
-        category_text = ", ".join(item["category"] for item in top_categories[:3]) or "your main categories"
-        return (
-            f"I can help with product discovery from the {area}. Right now the strongest categories look like {category_text}. "
-            "Tell me the product type, budget, or seller preference and I’ll suggest the next move."
-        )
+        category_text = ", ".join(item["category"] for item in top_categories[:3])
+        if category_text:
+            return f"I don't have an exact match for that yet, but our most active categories right now are {category_text}. What are you looking for specifically?"
+        return "I don't have a specific match for that search yet. Could you tell me the product name or category you're after?"
 
-    if any(word in query for word in ["order", "delivery", "shipment", "dispatch", "track"]):
+    if any(word in query for word in ["order", "delivery", "shipment", "dispatch", "track", "where is my"]):
         role_specific = tool_context.get("role_specific") or {}
         if role == "customer" and role_specific.get("recent_orders"):
             latest = role_specific["recent_orders"][0]
-            return (
-                f"Your latest visible order looks like {latest['product']} with status {latest['status']}. "
-                "A good reply style is: confirm the status, mention the next action, and say when the user should expect another update."
-            )
+            return f"Your most recent order ({latest['product']}) is currently: {latest['status']}. You can see full tracking details and confirm receipt from your Orders page."
         if role == "logistics" and role_specific.get("recent_deliveries"):
             latest = role_specific["recent_deliveries"][0]
-            return (
-                f"Your recent delivery flow shows status {latest['status']}. "
-                "I’d reply with the confirmed location/status first, then the next movement or handoff."
-            )
+            return f"Your most recent delivery is currently: {latest['status']}. Check your Deliveries tab for pickup/drop-off details and the verification code."
+        if role == "customer":
+            return "I don't see any recent orders on your account yet. Once you place an order, you'll be able to track its status here and on your Orders page."
         return (
-            f"For {role} work in the {area}, I’d keep the reply grounded in status plus next action. "
-            "Say what stage the order is in, what is confirmed, what is pending, and what should happen next."
+            f"For {role} order/delivery questions in the {area}: check the order's current status and what's confirmed vs. pending on the "
+            "relevant dashboard page, since that always reflects the live, authoritative state."
+        )
+
+    if any(word in query for word in ["payment", "pay", "mpesa", "m-pesa", "airtel", "tigo", "bank transfer", "refund"]):
+        return (
+            "Soko-Link supports M-Pesa, Airtel Money, Tigo Pesa, bank transfer, and cash on delivery, depending on what the seller "
+            "has enabled for that order. For a specific payment or refund question tied to an order, I'd need to check that order's "
+            "live payment status rather than guess -- what's the order or issue?"
         )
 
     if any(word in query for word in ["settings", "profile", "account", "password", "theme"]):
+        return "You can update your profile, password, and preferences from Settings. What specifically are you trying to change?"
+
+    if any(word in query for word in ["seller", "sell", "become a seller", "register a business"]):
         return (
-            "I’d reply in a calm step-by-step way here. Start with what the setting changes, then mention anything the user should review before saving."
+            "Sellers on Soko-Link can list and manage products, handle orders and fulfillment, and track sales performance. "
+            "If you want to become a seller, you can register a business account from the sign-up page. What would you like to know?"
+        )
+
+    if any(word in query for word in ["human", "agent", "support", "help", "complaint", "dispute"]):
+        return (
+            "I can help with most product, order, payment, and account questions directly. If this needs a human, "
+            "let me know the specifics and I'll point you to the right support channel or flag it for escalation."
         )
 
     return (
-        f"I’m supporting you from the {area}. The best reply style here is calm, specific, and action-oriented: acknowledge the goal, mention the known facts, and end with the next step."
+        f"I'm the Soko-Link assistant for the {area}. I can help with product discovery, order status, payments, deliveries, "
+        "or account questions -- what do you need?"
     )
 
 
