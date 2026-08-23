@@ -409,6 +409,15 @@ export interface SuperadminOverview {
     seller_name: string;
     seller_area?: string | null;
   }>;
+  status_breakdown: Array<{
+    status: string;
+    count: number;
+  }>;
+  revenue_trend: Array<{
+    date: string;
+    orders: number;
+    revenue: number;
+  }>;
   insights: Array<{
     id: string;
     title: string;

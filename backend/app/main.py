@@ -517,6 +517,8 @@ def superadmin_businessmen(
             "email": item.email,
             "phone": item.phone,
             "verification_status": item.verification_status,
+            "is_active": item.is_active,
+            "region": item.region,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in items
@@ -712,6 +714,7 @@ def superadmin_logistics(
             "phone": item.phone,
             "account_type": item.account_type,
             "verification_status": item.verification_status,
+            "is_active": item.is_active,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in items
@@ -809,6 +812,57 @@ def update_superadmin_business_verification(
     }
 
 
+@app.patch("/superadmin/businessmen/{business_id}/status")
+def update_superadmin_business_status(
+    business_id: int,
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("super_admin", "owner")),
+):
+    """Suspend/reactivate a seller account. Deliberately separate from
+    DELETE: deleting a seller is permanent and destroys their order/product
+    history, which is far too blunt a tool for routine moderation (a policy
+    violation, an unresponsive seller, a dispute under review). This is the
+    reversible action that was missing -- previously the only options for a
+    problem seller were "do nothing" or "delete everything they have"."""
+    item = db.query(BusinessUser).filter(BusinessUser.id == business_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Business account not found")
+
+    is_active = payload.get("is_active")
+    if not isinstance(is_active, bool):
+        raise HTTPException(status_code=400, detail="is_active (true/false) is required")
+
+    item.is_active = is_active
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    recipient_type, recipient_id, recipient_email, recipient_name = resolve_subject(item)
+    create_notification(
+        db,
+        recipient_type=recipient_type,
+        recipient_id=recipient_id,
+        recipient_email=recipient_email,
+        title="Your seller account has been reactivated" if is_active else "Your seller account has been suspended",
+        message=(
+            "Your SokoLnk seller account is active again -- you can resume listing and fulfilling orders."
+            if is_active
+            else "Your SokoLnk seller account has been suspended by an administrator. Contact support for details."
+        ),
+        notification_type="system",
+        severity="success" if is_active else "warning",
+        send_email=bool(recipient_email),
+        email_subject="Your SokoLnk seller account status has changed",
+        email_body=f"Hello {recipient_name},\n\nYour seller account status is now: {'active' if is_active else 'suspended'}.\n\nSokoLnk Team",
+        background_tasks=background_tasks,
+    )
+    db.commit()
+
+    return {"message": "Business status updated", "id": item.id, "is_active": item.is_active}
+
+
 @app.patch("/superadmin/logistics/{logistics_id}/verification")
 def update_superadmin_logistics_verification(
     logistics_id: int,
@@ -833,6 +887,54 @@ def update_superadmin_logistics_verification(
         "id": item.id,
         "verification_status": item.verification_status,
     }
+
+
+@app.patch("/superadmin/logistics/{logistics_id}/status")
+def update_superadmin_logistics_status(
+    logistics_id: int,
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("super_admin", "owner")),
+):
+    """Suspend/reactivate a logistics partner account -- same rationale as
+    the businessman status endpoint: reversible moderation, distinct from
+    permanent deletion."""
+    item = db.query(LogisticsUser).filter(LogisticsUser.id == logistics_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Logistics account not found")
+
+    is_active = payload.get("is_active")
+    if not isinstance(is_active, bool):
+        raise HTTPException(status_code=400, detail="is_active (true/false) is required")
+
+    item.is_active = is_active
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    recipient_type, recipient_id, recipient_email, recipient_name = resolve_subject(item)
+    create_notification(
+        db,
+        recipient_type=recipient_type,
+        recipient_id=recipient_id,
+        recipient_email=recipient_email,
+        title="Your delivery account has been reactivated" if is_active else "Your delivery account has been suspended",
+        message=(
+            "Your SokoLnk delivery account is active again -- you can resume accepting deliveries."
+            if is_active
+            else "Your SokoLnk delivery account has been suspended by an administrator. Contact support for details."
+        ),
+        notification_type="system",
+        severity="success" if is_active else "warning",
+        send_email=bool(recipient_email),
+        email_subject="Your SokoLnk delivery account status has changed",
+        email_body=f"Hello {recipient_name},\n\nYour delivery account status is now: {'active' if is_active else 'suspended'}.\n\nSokoLnk Team",
+        background_tasks=background_tasks,
+    )
+    db.commit()
+
+    return {"message": "Logistics status updated", "id": item.id, "is_active": item.is_active}
 
 
 @app.post("/superadmin/logistics", status_code=201)

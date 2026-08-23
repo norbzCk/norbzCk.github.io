@@ -1,8 +1,13 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  AreaChart, Area, BarChart, Bar, PieChart as RePieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from "recharts";
 import { 
   ShieldCheck, 
+  ShieldOff,
   TrendingUp, 
   Users, 
   ShoppingBag, 
@@ -24,14 +29,15 @@ import {
   Calendar,
   Activity,
   ArrowUpRight,
+  ArrowDownRight,
   Clock,
-  MessageSquare
+  MessageSquare,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "../features/auth/AuthContext";
 import { apiRequest } from "../lib/http";
 import { PageIntro, StatCards, SectionCard } from "../components/ui/PageSections";
 import type { SuperadminOverview, VerificationBusinessman, VerificationLogistics, VerificationUser } from "../types/domain";
-import { env } from "../config/env";
 
 interface Businessman {
   id: number;
@@ -40,6 +46,8 @@ interface Businessman {
   email: string;
   phone: string;
   verification_status?: string;
+  is_active?: boolean;
+  region?: string | null;
   created_at?: string;
 }
 
@@ -60,6 +68,7 @@ interface LogisticsUser {
   phone: string;
   account_type: string;
   verification_status?: string;
+  is_active?: boolean;
   created_at?: string;
 }
 
@@ -75,14 +84,18 @@ interface Dispute {
   resolved_at: string | null;
 }
 
-interface GlobalAnalytics {
-  graphs: {
-    revenueByProduct: string | null;
-    revenueOverTime: string | null;
-  };
-}
-
 type ActiveTab = "businessmen" | "customers" | "logistics";
+type OnboardKind = "businessmen" | "customers" | "logistics";
+
+const STATUS_COLORS: Record<string, string> = {
+  Pending: "#f59e0b",
+  Confirmed: "#3b82f6",
+  Packed: "#8b5cf6",
+  "Ready For Shipping": "#06b6d4",
+  Shipped: "#0ea5e9",
+  Received: "#10b981",
+  Cancelled: "#ef4444",
+};
 
 function formatMoney(value?: number) {
   return `TZS ${Number(value || 0).toLocaleString()}`;
@@ -95,10 +108,16 @@ function compactMoney(value?: number) {
   })}`;
 }
 
+function emptyOnboardForm() {
+  return {
+    business_name: "", owner_name: "", name: "", email: "", phone: "", password: "",
+    region: "Dar es Salaam", account_type: "individual",
+  };
+}
+
 export function SuperadminDashboardPage() {
   const navigate = useNavigate();
   const [overview, setOverview] = useState<SuperadminOverview | null>(null);
-  const [analytics, setAnalytics] = useState<GlobalAnalytics | null>(null);
   const [businessmen, setBusinessmen] = useState<Businessman[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [logistics, setLogistics] = useState<LogisticsUser[]>([]);
@@ -108,6 +127,11 @@ export function SuperadminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ActiveTab>("businessmen");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [onboardKind, setOnboardKind] = useState<OnboardKind>("businessmen");
+  const [onboardForm, setOnboardForm] = useState(emptyOnboardForm());
+  const [onboardSubmitting, setOnboardSubmitting] = useState(false);
+  const [onboardError, setOnboardError] = useState("");
+  const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null);
   const [verificationTab, setVerificationTab] = useState<"businessmen" | "logistics" | "users">("businessmen");
   const [verificationData, setVerificationData] = useState<{
     businessmen: VerificationBusinessman[];
@@ -123,12 +147,11 @@ export function SuperadminDashboardPage() {
      setLoading(true);
      setError("");
      try {
-       const [overviewData, businessmenData, customersData, logisticsData, analyticsData, disputesData] = await Promise.all([
+       const [overviewData, businessmenData, customersData, logisticsData, disputesData] = await Promise.all([
          apiRequest<SuperadminOverview>("/superadmin/stats"),
          apiRequest<Businessman[]>("/superadmin/businessmen"),
          apiRequest<Customer[]>("/superadmin/customers"),
          apiRequest<LogisticsUser[]>("/superadmin/logistics"),
-         apiRequest<GlobalAnalytics>("/dashboard/analytics"),
          apiRequest<Dispute[]>("/disputes"),
        ]);
         const verifications = await apiRequest<{
@@ -142,7 +165,6 @@ export function SuperadminDashboardPage() {
        setLogistics(logisticsData);
        setDisputes(disputesData);
        setVerificationData(verifications);
-       setAnalytics(analyticsData);
      } catch (err) {
        setError(err instanceof Error ? err.message : "Failed to load superadmin overview");
      } finally {
@@ -178,6 +200,92 @@ export function SuperadminDashboardPage() {
     }
   }
 
+  async function toggleActiveStatus(kind: "businessmen" | "logistics", id: number, nextActive: boolean) {
+    setStatusUpdatingId(id);
+    setError("");
+    try {
+      await apiRequest(`/superadmin/${kind}/${id}/status`, {
+        method: "PATCH",
+        body: { is_active: nextActive },
+      });
+      setSuccess(nextActive ? "Account reactivated." : "Account suspended.");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update account status");
+    } finally {
+      setStatusUpdatingId(null);
+    }
+  }
+
+  function openOnboardModal(kind: OnboardKind) {
+    setOnboardKind(kind);
+    setOnboardForm(emptyOnboardForm());
+    setOnboardError("");
+    setShowAddModal(true);
+  }
+
+  async function handleOnboardSubmit(e: FormEvent) {
+    e.preventDefault();
+    setOnboardSubmitting(true);
+    setOnboardError("");
+    try {
+      if (onboardKind === "businessmen") {
+        if (!onboardForm.business_name.trim() || !onboardForm.owner_name.trim()) {
+          throw new Error("Business name and owner name are required.");
+        }
+        if (!onboardForm.phone.trim()) throw new Error("Phone number is required.");
+        if (onboardForm.password.length < 8) throw new Error("Password must be at least 8 characters.");
+        await apiRequest("/superadmin/businessmen", {
+          method: "POST",
+          body: {
+            business_name: onboardForm.business_name,
+            owner_name: onboardForm.owner_name,
+            phone: onboardForm.phone,
+            email: onboardForm.email || undefined,
+            password: onboardForm.password,
+            region: onboardForm.region,
+          },
+        });
+        setSuccess(`${onboardForm.business_name} was onboarded as a seller.`);
+      } else if (onboardKind === "customers") {
+        if (!onboardForm.name.trim()) throw new Error("Name is required.");
+        if (!onboardForm.phone.trim()) throw new Error("Phone number is required.");
+        if (onboardForm.password.length < 8) throw new Error("Password must be at least 8 characters.");
+        await apiRequest("/superadmin/customers", {
+          method: "POST",
+          body: {
+            name: onboardForm.name,
+            phone: onboardForm.phone,
+            email: onboardForm.email || undefined,
+            password: onboardForm.password,
+          },
+        });
+        setSuccess(`${onboardForm.name} was onboarded as a customer.`);
+      } else {
+        if (!onboardForm.name.trim()) throw new Error("Name is required.");
+        if (!onboardForm.phone.trim()) throw new Error("Phone number is required.");
+        if (onboardForm.password.length < 8) throw new Error("Password must be at least 8 characters.");
+        await apiRequest("/superadmin/logistics", {
+          method: "POST",
+          body: {
+            name: onboardForm.name,
+            phone: onboardForm.phone,
+            email: onboardForm.email || undefined,
+            password: onboardForm.password,
+            account_type: onboardForm.account_type,
+          },
+        });
+        setSuccess(`${onboardForm.name} was onboarded as a logistics partner.`);
+      }
+      setShowAddModal(false);
+      await loadData();
+    } catch (err) {
+      setOnboardError(err instanceof Error ? err.message : "Failed to onboard entity");
+    } finally {
+      setOnboardSubmitting(false);
+    }
+  }
+
   const statItems = useMemo(() => {
     if (!overview) return [];
     return [
@@ -189,12 +297,30 @@ export function SuperadminDashboardPage() {
     ];
   }, [overview]);
 
-  const currentData = activeTab === "businessmen" ? businessmen : activeTab === "customers" ? customers : logistics;
+  const revenueGrowth = useMemo(() => {
+    const trend = overview?.revenue_trend || [];
+    if (trend.length < 14) return null;
+    const lastWeek = trend.slice(-7).reduce((sum, day) => sum + day.revenue, 0);
+    const priorWeek = trend.slice(-14, -7).reduce((sum, day) => sum + day.revenue, 0);
+    if (priorWeek === 0) return lastWeek > 0 ? { percent: 100, positive: true } : null;
+    const percent = ((lastWeek - priorWeek) / priorWeek) * 100;
+    return { percent: Math.round(percent * 10) / 10, positive: percent >= 0 };
+  }, [overview]);
 
-  function resolveGraphUrl(path?: string | null) {
-    if (!path) return "";
-    return `${env.apiBase}${path}?t=${Date.now()}`;
-  }
+  const revenueTrendChartData = useMemo(
+    () => (overview?.revenue_trend || []).map((day) => ({
+      ...day,
+      label: new Date(day.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    })),
+    [overview],
+  );
+
+  const statusPipelineData = useMemo(
+    () => (overview?.status_breakdown || []).filter((row) => row.count > 0),
+    [overview],
+  );
+
+  const currentData = activeTab === "businessmen" ? businessmen : activeTab === "customers" ? customers : logistics;
 
   if (loading) {
     return (
@@ -213,7 +339,7 @@ export function SuperadminDashboardPage() {
         description="Unified oversight of the smart marketplace network. Manage entities, verify trust levels, and monitor economic trajectory."
         actions={
           <div className="flex gap-3">
-            <button onClick={() => setShowAddModal(true)} className="btn-primary !h-12 !px-6 flex items-center gap-2">
+            <button onClick={() => openOnboardModal("businessmen")} className="btn-primary !h-12 !px-6 flex items-center gap-2">
               <Plus size={16} />
               Register Entity
             </button>
@@ -296,25 +422,46 @@ export function SuperadminDashboardPage() {
                 <TrendingUp size={20} className="text-brand" />
                 Economic Trajectory
               </h3>
-              <p className="text-xs text-text-muted font-medium">Real-time revenue synchronization across the network.</p>
+              <p className="text-xs text-text-muted font-medium">Daily revenue across the last 14 days.</p>
             </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-black uppercase tracking-widest border border-emerald-500/20">
-              <ArrowUpRight size={14} />
-              +14.2% Growth
-            </div>
+            {revenueGrowth && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border ${
+                revenueGrowth.positive
+                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                  : "bg-danger/10 text-danger border-danger/20"
+              }`}>
+                {revenueGrowth.positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                {revenueGrowth.positive ? "+" : ""}{revenueGrowth.percent}% week over week
+              </div>
+            )}
           </div>
           
-          <div className="aspect-[21/9] w-full rounded-2xl overflow-hidden bg-surface-soft/50 border border-border flex items-center justify-center">
-            {analytics?.graphs.revenueOverTime ? (
-              <img 
-                src={resolveGraphUrl(analytics.graphs.revenueOverTime)} 
-                alt="Revenue Trend" 
-                className="w-full h-full object-contain filter dark:invert dark:brightness-90 dark:contrast-125 dark:opacity-90"
-              />
+          <div className="aspect-[21/9] w-full rounded-2xl overflow-hidden bg-surface-soft/50 border border-border p-4">
+            {revenueTrendChartData.some((d) => d.revenue > 0) ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={revenueTrendChartData}>
+                  <defs>
+                    <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--brand)" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="var(--brand)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.15} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(value) => compactMoney(value)} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={70} />
+                  <Tooltip
+                    formatter={(value, name) =>
+                      name === "revenue" ? [formatMoney(Number(value ?? 0)), "Revenue"] : [(value as number) ?? 0, "Orders"]
+                    }
+                    labelFormatter={(label) => label}
+                  />
+                  <Area type="monotone" dataKey="revenue" stroke="var(--brand)" strokeWidth={2.5} fill="url(#revenueGradient)" />
+                </AreaChart>
+              </ResponsiveContainer>
             ) : (
-              <div className="flex flex-col items-center gap-4 opacity-30">
+              <div className="flex flex-col items-center justify-center h-full gap-4 opacity-30">
                 <BarChart3 size={48} />
-                <p className="text-[10px] font-black uppercase tracking-widest">Aggregating protocol data...</p>
+                <p className="text-[10px] font-black uppercase tracking-widest">No completed orders in the last 14 days yet.</p>
               </div>
             )}
           </div>
@@ -414,6 +561,47 @@ export function SuperadminDashboardPage() {
         </SectionCard>
       </div>
 
+      {/* Order Pipeline */}
+      {statusPipelineData.length > 0 && (
+        <SectionCard title="Order Pipeline" description="Where every order currently sits, across the entire marketplace.">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
+            <div className="lg:col-span-1 aspect-square max-h-[260px] mx-auto w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <RePieChart>
+                  <Pie
+                    data={statusPipelineData}
+                    dataKey="count"
+                    nameKey="status"
+                    innerRadius="60%"
+                    outerRadius="90%"
+                    paddingAngle={2}
+                  >
+                    {statusPipelineData.map((entry) => (
+                      <Cell key={entry.status} fill={STATUS_COLORS[entry.status] || "#94a3b8"} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value, _name, item: any) => [`${value ?? 0} orders`, item?.payload?.status]} />
+                </RePieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {(overview?.status_breakdown || []).map((row) => (
+                <div key={row.status} className="p-4 rounded-xl bg-surface-soft/50 border border-border flex items-center gap-3">
+                  <span
+                    className="h-3 w-3 rounded-full shrink-0"
+                    style={{ backgroundColor: STATUS_COLORS[row.status] || "#94a3b8" }}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-black text-text-muted uppercase tracking-widest truncate">{row.status}</p>
+                    <p className="text-lg font-display font-black text-text">{row.count}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      )}
+
       {/* Main Directory Ledger */}
       <SectionCard 
         title="Account Ledger" 
@@ -478,25 +666,71 @@ export function SuperadminDashboardPage() {
                         </span>
                       )}
                       {activeTab === 'businessmen' && (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
-                          item.verification_status === 'verified' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
-                        }`}>
-                          {item.verification_status || 'pending'}
-                        </span>
+                        <>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
+                            ('verification_status' in item && item.verification_status === 'verified')
+                              ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                              : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                          }`}>
+                            {('verification_status' in item && item.verification_status) || 'pending'}
+                          </span>
+
+                          {'is_active' in item && item.is_active === false && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit bg-danger/10 text-danger border border-danger/20">
+                              Suspended
+                            </span>
+                          )}
+                        </>
                       )}
                       {activeTab === 'logistics' && (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
-                          item.verification_status === 'verified' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
-                        }`}>
-                          {item.verification_status || 'pending'}
-                        </span>
+                        <>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
+                            ('verification_status' in item && item.verification_status === 'verified')
+                              ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                              : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                          }`}>
+                            {('verification_status' in item && item.verification_status) || 'pending'}
+                          </span>
+
+                          {'is_active' in item && item.is_active === false && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit bg-danger/10 text-danger border border-danger/20">
+                              Suspended
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
                   <td className="py-4 text-right">
-                    <button onClick={() => void deleteEntity(activeTab, item.id)} className="w-8 h-8 rounded-lg bg-danger/5 text-danger flex items-center justify-center ml-auto hover:bg-danger hover:text-white transition-all opacity-0 group-hover:opacity-100">
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {(activeTab === 'businessmen' || activeTab === 'logistics') && 'is_active' in item && (
+                        <button
+                          onClick={() => void toggleActiveStatus(activeTab, item.id, item.is_active === false)}
+                          disabled={statusUpdatingId === item.id}
+                          title={item.is_active === false ? "Reactivate account" : "Suspend account"}
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all disabled:opacity-50 ${
+                            item.is_active === false
+                              ? "bg-emerald-500/5 text-emerald-500 hover:bg-emerald-500 hover:text-white"
+                              : "bg-yellow-500/5 text-yellow-600 hover:bg-yellow-500 hover:text-white"
+                          }`}
+                        >
+                          {statusUpdatingId === item.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : item.is_active === false ? (
+                            <ShieldCheck size={14} />
+                          ) : (
+                            <ShieldOff size={14} />
+                          )}
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => void deleteEntity(activeTab, item.id)}
+                        className="w-8 h-8 rounded-lg bg-danger/5 text-danger flex items-center justify-center hover:bg-danger hover:text-white transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -628,24 +862,90 @@ export function SuperadminDashboardPage() {
         {showAddModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddModal(false)} className="absolute inset-0 bg-dark-bg/60 backdrop-blur-md" />
-            <motion.div initial={{ scale: 0.98, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} className="relative w-full max-w-xl glass-card border border-white/10 shadow-[0_50px_100px_rgba(0,0,0,0.4)] overflow-hidden">
-              <div className="p-8 border-b border-border flex items-center justify-between bg-surface/50">
+            <motion.div initial={{ scale: 0.98, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} className="relative w-full max-w-xl glass-card border border-white/10 shadow-[0_50px_100px_rgba(0,0,0,0.4)] overflow-hidden max-h-[90vh] flex flex-col">
+              <div className="p-8 border-b border-border flex items-center justify-between bg-surface/50 shrink-0">
                 <div>
                   <h3 className="text-xl font-display font-black text-text uppercase tracking-tight">Onboard Entity</h3>
-                  <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mt-1">Registration protocol active.</p>
+                  <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mt-1">Create a new account directly.</p>
                 </div>
                 <button onClick={() => setShowAddModal(false)} className="w-10 h-10 rounded-xl bg-surface-soft flex items-center justify-center hover:bg-surface-strong transition-all"><X size={18} /></button>
               </div>
-              <div className="p-10 text-center space-y-6">
-                <div className="w-20 h-20 rounded-[2.5rem] bg-brand/10 text-brand flex items-center justify-center mx-auto border-2 border-dashed border-brand/30">
-                  <Globe size={40} className="animate-pulse" />
+
+              <div className="flex border-b border-border shrink-0">
+                {(["businessmen", "customers", "logistics"] as OnboardKind[]).map((kind) => (
+                  <button
+                    key={kind}
+                    onClick={() => { setOnboardKind(kind); setOnboardForm(emptyOnboardForm()); setOnboardError(""); }}
+                    className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                      onboardKind === kind ? "text-brand border-b-2 border-brand bg-brand/5" : "text-text-muted hover:text-text"
+                    }`}
+                  >
+                    {kind === "businessmen" ? "Seller" : kind === "customers" ? "Customer" : "Logistics"}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleOnboardSubmit} className="p-8 space-y-4 overflow-y-auto">
+                {onboardError && (
+                  <div className="rounded-xl bg-danger/10 border border-danger/20 text-danger text-xs font-semibold px-4 py-3">
+                    {onboardError}
+                  </div>
+                )}
+
+                {onboardKind === "businessmen" && (
+                  <>
+                    <FormField label="Business Name" required>
+                      <input value={onboardForm.business_name} onChange={(e) => setOnboardForm((f) => ({ ...f, business_name: e.target.value }))} className="modern-input" placeholder="e.g. Kilimo Fresh Produce" />
+                    </FormField>
+                    <FormField label="Owner Name" required>
+                      <input value={onboardForm.owner_name} onChange={(e) => setOnboardForm((f) => ({ ...f, owner_name: e.target.value }))} className="modern-input" placeholder="e.g. Amina Hassan" />
+                    </FormField>
+                    <FormField label="Region">
+                      <input value={onboardForm.region} onChange={(e) => setOnboardForm((f) => ({ ...f, region: e.target.value }))} className="modern-input" />
+                    </FormField>
+                  </>
+                )}
+
+                {onboardKind === "customers" && (
+                  <FormField label="Full Name" required>
+                    <input value={onboardForm.name} onChange={(e) => setOnboardForm((f) => ({ ...f, name: e.target.value }))} className="modern-input" placeholder="e.g. John Mwangi" />
+                  </FormField>
+                )}
+
+                {onboardKind === "logistics" && (
+                  <>
+                    <FormField label="Full Name" required>
+                      <input value={onboardForm.name} onChange={(e) => setOnboardForm((f) => ({ ...f, name: e.target.value }))} className="modern-input" placeholder="e.g. Juma Rider" />
+                    </FormField>
+                    <FormField label="Account Type">
+                      <select value={onboardForm.account_type} onChange={(e) => setOnboardForm((f) => ({ ...f, account_type: e.target.value }))} className="modern-input">
+                        <option value="individual">Individual rider</option>
+                        <option value="company">Logistics company</option>
+                      </select>
+                    </FormField>
+                  </>
+                )}
+
+                <FormField label="Phone Number" required>
+                  <input value={onboardForm.phone} onChange={(e) => setOnboardForm((f) => ({ ...f, phone: e.target.value }))} className="modern-input" placeholder="+255 7XX XXX XXX" />
+                </FormField>
+
+                <FormField label="Email" required={onboardKind === "customers"}>
+                  <input type="email" value={onboardForm.email} onChange={(e) => setOnboardForm((f) => ({ ...f, email: e.target.value }))} className="modern-input" placeholder="name@example.com" />
+                </FormField>
+
+                <FormField label="Temporary Password" required>
+                  <input type="password" value={onboardForm.password} onChange={(e) => setOnboardForm((f) => ({ ...f, password: e.target.value }))} className="modern-input" placeholder="At least 8 characters" />
+                </FormField>
+
+                <div className="pt-4 flex justify-end gap-3">
+                  <button type="button" onClick={() => setShowAddModal(false)} className="h-12 px-6 rounded-xl text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-text transition-all">Cancel</button>
+                  <button type="submit" disabled={onboardSubmitting} className="h-12 px-8 bg-brand text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand/20 hover:bg-brand-strong transition-all disabled:opacity-50 flex items-center gap-2">
+                    {onboardSubmitting && <Loader2 size={14} className="animate-spin" />}
+                    {onboardSubmitting ? "Creating..." : "Create Account"}
+                  </button>
                 </div>
-                <p className="text-sm font-medium text-text-muted max-w-xs mx-auto leading-relaxed">Systematic registration of new marketplace entities requires identity validation.</p>
-              </div>
-              <div className="p-8 bg-surface-soft/80 border-t border-border flex justify-end gap-3">
-                <button onClick={() => setShowAddModal(false)} className="h-12 px-6 rounded-xl text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-text transition-all">Cancel</button>
-                <button className="h-12 px-8 bg-brand text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand/20 hover:bg-brand-strong transition-all">Confirm Protocol</button>
-              </div>
+              </form>
             </motion.div>
           </div>
          )}
@@ -653,3 +953,14 @@ export function SuperadminDashboardPage() {
      </div>
    );
  }
+
+function FormField({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">
+        {label}{required && <span className="text-danger ml-0.5">*</span>}
+      </span>
+      {children}
+    </label>
+  );
+}

@@ -645,14 +645,21 @@ def get_ai_reply(message: str, user_context: dict, market_context: dict, tool_co
             "Tell me the exact message or situation and I'll tailor the wording."
         )
 
+    # Check for a real product match FIRST, before any keyword gate: someone
+    # asking "do you have solar lamps?" or just naming a product by name
+    # won't hit a generic keyword list like ["product", "catalog", "find"],
+    # but the live db search behind tool_context already found (or didn't
+    # find) a real match for this exact message -- trust that over guessing
+    # from a handful of keywords.
+    matched_products = tool_context.get("matched_products") or []
+    if matched_products and not any(word in query for word in ["hello", "hi", "hey", "mambo", "habari"]):
+        preview = ", ".join(f"{item['name']} (TZS {item['price']:,.0f})" for item in matched_products[:3])
+        return f"Here's what I found: {preview}. Want more detail on any of these, or a different category?"
+
     if any(word in query for word in ["hello", "hi", "hey", "mambo", "habari"]):
         return f"Hi {name}! I'm the Soko-Link assistant. Ask me about products, your orders, deliveries, payments, or your account, and I'll help directly."
 
     if any(word in query for word in ["product", "catalog", "find", "search", "recommend"]):
-        matched_products = tool_context.get("matched_products") or []
-        if matched_products:
-            preview = ", ".join(f"{item['name']} (TZS {item['price']:,.0f})" for item in matched_products[:3])
-            return f"Here's what I found: {preview}. Want more detail on any of these, or a different category?"
         top_categories = market_context.get("top_categories") or []
         category_text = ", ".join(item["category"] for item in top_categories[:3])
         if category_text:
@@ -669,6 +676,8 @@ def get_ai_reply(message: str, user_context: dict, market_context: dict, tool_co
             return f"Your most recent delivery is currently: {latest['status']}. Check your Deliveries tab for pickup/drop-off details and the verification code."
         if role == "customer":
             return "I don't see any recent orders on your account yet. Once you place an order, you'll be able to track its status here and on your Orders page."
+        if role == "guest":
+            return "To check an order's status, you'll need to sign in first -- I can only look up orders tied to your account. Once you're signed in, ask me again and I'll pull up the details."
         return (
             f"For {role} order/delivery questions in the {area}: check the order's current status and what's confirmed vs. pending on the "
             "relevant dashboard page, since that always reflects the live, authoritative state."
