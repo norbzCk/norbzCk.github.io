@@ -33,7 +33,6 @@ import {
 import logoUrl from "../assets/sokolink-logo.png";
 import { useAuth } from "../features/auth/AuthContext";
 import { useTheme } from "../features/auth/ThemeContext";
-import { useAIAssistant } from "../features/ai/AIAssistantContext";
 import { useCart } from "../features/auth/CartContext";
 import { env } from "../config/env";
 import { getPostLoginPath } from "../features/auth/authStorage";
