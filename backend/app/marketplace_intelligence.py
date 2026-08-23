@@ -653,6 +653,41 @@ def build_superadmin_overview(db: Session) -> dict[str, Any]:
         .all()
     )
 
+    # Full order-status breakdown (not just the completed/pending/in_transit
+    # buckets above) -- gives the dashboard enough to draw a real pipeline/
+    # funnel view of where orders actually are right now.
+    all_statuses = ["Pending", "Confirmed", "Packed", "Ready For Shipping", "Shipped", "Received", "Cancelled"]
+    status_counts_rows = db.query(Sale.status, func.count(Sale.id)).group_by(Sale.status).all()
+    status_counts_map = {row[0]: row[1] for row in status_counts_rows}
+    status_breakdown = [
+        {"status": status, "count": status_counts_map.get(status, 0)}
+        for status in all_statuses
+    ]
+
+    # Daily revenue + order count for the last 14 days, for a real trend
+    # line instead of the old static matplotlib image.
+    trend_start = datetime.utcnow().date() - timedelta(days=13)
+    daily_rows = (
+        db.query(
+            Sale.date,
+            func.count(Sale.id).label("orders"),
+            func.sum(Sale.quantity * Sale.unit_price).label("revenue"),
+        )
+        .filter(Sale.date >= trend_start, Sale.status.in_(completed_statuses))
+        .group_by(Sale.date)
+        .all()
+    )
+    daily_map = {row[0]: {"orders": int(row[1] or 0), "revenue": float(row[2] or 0)} for row in daily_rows}
+    revenue_trend = []
+    for offset in range(14):
+        day = trend_start + timedelta(days=offset)
+        entry = daily_map.get(day, {"orders": 0, "revenue": 0.0})
+        revenue_trend.append({
+            "date": day.isoformat(),
+            "orders": entry["orders"],
+            "revenue": entry["revenue"],
+        })
+
     return {
         "total_businessmen": total_businessmen,
         "active_businessmen": active_businessmen,
@@ -697,6 +732,8 @@ def build_superadmin_overview(db: Session) -> dict[str, Any]:
             }
             for product, seller in inventory_watch
         ],
+        "status_breakdown": status_breakdown,
+        "revenue_trend": revenue_trend,
         "insights": [
             {
                 "id": "seller-density",

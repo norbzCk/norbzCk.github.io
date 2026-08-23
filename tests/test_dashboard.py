@@ -336,3 +336,91 @@ class TestSuperadminEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert "deleted" in data["message"].lower() or "Business account deleted" in data["message"]
+
+    def test_superadmin_stats_includes_status_breakdown_and_revenue_trend(self, client, db, admin_user):
+        """Regression test for the superadmin dashboard's real charts: these
+        fields didn't exist before and the frontend had no way to render an
+        order-status funnel or a revenue trend line without them."""
+        login = login_as(client, "admin@test.com", "AdminPass1!")
+        token = login.json()["access_token"]
+
+        response = client.get("/superadmin/stats", headers=auth_header(token))
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "status_breakdown" in data
+        statuses = {row["status"] for row in data["status_breakdown"]}
+        assert {"Pending", "Confirmed", "Packed", "Shipped", "Received", "Cancelled"}.issubset(statuses)
+
+        assert "revenue_trend" in data
+        assert len(data["revenue_trend"]) == 14
+        for row in data["revenue_trend"]:
+            assert "date" in row and "revenue" in row and "orders" in row
+
+    def test_suspend_and_reactivate_businessman(self, client, db, admin_user, seller_user):
+        login = login_as(client, "admin@test.com", "AdminPass1!")
+        token = login.json()["access_token"]
+
+        response = client.patch(f"/superadmin/businessmen/{seller_user.id}/status", json={
+            "is_active": False,
+        }, headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["is_active"] is False
+
+        listing = client.get("/superadmin/businessmen", headers=auth_header(token))
+        matched = next(b for b in listing.json() if b["id"] == seller_user.id)
+        assert matched["is_active"] is False
+
+        response = client.patch(f"/superadmin/businessmen/{seller_user.id}/status", json={
+            "is_active": True,
+        }, headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["is_active"] is True
+
+    def test_suspend_businessman_rejects_non_boolean(self, client, db, admin_user, seller_user):
+        login = login_as(client, "admin@test.com", "AdminPass1!")
+        token = login.json()["access_token"]
+
+        response = client.patch(f"/superadmin/businessmen/{seller_user.id}/status", json={
+            "is_active": "not-a-boolean",
+        }, headers=auth_header(token))
+        assert response.status_code == 400
+
+    def test_suspend_nonexistent_businessman(self, client, db, admin_user):
+        login = login_as(client, "admin@test.com", "AdminPass1!")
+        token = login.json()["access_token"]
+
+        response = client.patch("/superadmin/businessmen/999999/status", json={
+            "is_active": False,
+        }, headers=auth_header(token))
+        assert response.status_code == 404
+
+    def test_suspend_and_reactivate_logistics(self, client, db, admin_user):
+        from backend.models import LogisticsUser
+        from backend.app.auth import hash_password
+
+        logi = LogisticsUser(
+            name="Test Rider",
+            email="suspend_test_rider@test.com",
+            phone="+255700000950",
+            password_hash=hash_password("RiderPass1!"),
+            is_active=True,
+            is_verified=True,
+            status="active",
+        )
+        db.add(logi)
+        db.commit()
+        db.refresh(logi)
+
+        login = login_as(client, "admin@test.com", "AdminPass1!")
+        token = login.json()["access_token"]
+
+        response = client.patch(f"/superadmin/logistics/{logi.id}/status", json={
+            "is_active": False,
+        }, headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["is_active"] is False
+
+        listing = client.get("/superadmin/logistics", headers=auth_header(token))
+        matched = next(l for l in listing.json() if l["id"] == logi.id)
+        assert matched["is_active"] is False

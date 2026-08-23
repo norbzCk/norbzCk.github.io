@@ -1,7 +1,6 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../auth/AuthContext";
-import { useAIAssistant } from "../ai/AIAssistantContext";
 import { useTheme } from "../../features/auth/ThemeContext";
 import { Sidebar } from "../../components/Sidebar";
 import { env } from "../../config/env";
