@@ -31,13 +31,13 @@ services:
     pullRequestPreviewsEnabled: false
     envVars:
       - key: DATABASE_URL
-        value: postgresql://postgres.jjryzuwfzneyxtkkjejd:Xk5ydMQ3oxAZoJpP@aws-0-eu-north-1.pooler.supabase.com:5432/postgres
+        sync: false
       - key: SUPABASE_URL
         value: https://jjryzuwfzneyxtkkjejd.supabase.co
       - key: SUPABASE_JWKS_URL
         value: https://jjryzuwfzneyxtkkjejd.supabase.co/auth/v1/.well-known/jwks.json
       - key: SUPABASE_DATABASE_URL
-        value: postgresql://postgres.jjryzuwfzneyxtkkjejd:Xk5ydMQ3oxAZoJpP@aws-0-eu-north-1.pooler.supabase.com:5432/postgres
+        sync: false
       - key: APP_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
