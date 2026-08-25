@@ -12,6 +12,7 @@ export interface SessionUser {
   role?: UserRole | string;
   business_name?: string;
   owner_name?: string;
+  is_verified?: boolean;
 }
 
 export interface AuthResponse {

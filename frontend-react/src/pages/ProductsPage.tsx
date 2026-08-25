@@ -294,6 +294,11 @@ export function ProductsPage() {
       return;
     }
 
+    if (!editingId && !user?.is_verified) {
+      setError("Please verify your email before listing products.");
+      return;
+    }
+
     try {
       if (editingId) {
         await apiRequest(`/products/${editingId}`, { method: "PUT", body: payload });
@@ -466,7 +471,14 @@ export function ProductsPage() {
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-display font-black text-text tracking-tight">Product Management</h2>
             <button 
-              onClick={() => setShowForm(!showForm)}
+              onClick={() => {
+                if (!user?.is_verified) {
+                  setError("Please verify your email before listing products. Check the banner above to resend the confirmation email.");
+                  return;
+                }
+                setError("");
+                setShowForm(!showForm);
+              }}
               className="btn-primary !py-2.5 flex items-center gap-2"
             >
               {showForm ? <X size={18} /> : <Plus size={18} />}

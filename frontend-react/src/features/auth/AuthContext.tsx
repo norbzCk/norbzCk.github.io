@@ -30,6 +30,7 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   refreshUser: () => Promise<SessionUser | null>;
   verifyEmail: (token: string) => Promise<void>;
+  resendConfirmationEmail: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -207,9 +208,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       access_token = data.session?.access_token;
       userFromSupabase = data.user;
-    } catch (supabaseError) {
-      // Supabase auth failed (e.g., email not confirmed). Fall back to
-      // the backend app JWT login so existing app users are not locked out.
+    } catch (supabaseError: any) {
+      // "Email not confirmed" means this IS a Supabase-registered account,
+      // just not verified yet -- falling through to the legacy backend
+      // would just produce a confusing, unrelated error, since that
+      // account doesn't exist there. Stop here with a clear message.
+      const message = String(supabaseError?.message || "").toLowerCase();
+      if (message.includes("email not confirmed") || message.includes("email_not_confirmed")) {
+        throw new Error(
+          "Please check your email and click the confirmation link before signing in. " +
+          "Didn't get it? Check spam, or request a new confirmation email."
+        );
+      }
+
+      // Any other Supabase auth failure (e.g. account genuinely predates
+      // Supabase auth): fall back to the legacy backend JWT login so
+      // existing app users are not locked out.
       const trimmed = identifier.trim();
       const isEmail = trimmed.includes("@");
       const payload = isEmail
@@ -251,7 +265,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const fetched = await apiRequest<SessionUser>("/auth/supabase/me");
     const userType: UserType = (fetched as any).user_type || "user";
-    const merged = normalizeUser(fetched, userType);
+    const isEmailVerified = Boolean(
+      userFromSupabase?.email_confirmed_at || userFromSupabase?.confirmed_at
+    );
+    const merged = normalizeUser({ ...fetched, is_verified: isEmailVerified }, userType);
     if (merged) {
       persistSession(access_token, merged, userType);
     }
@@ -360,37 +377,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error("Supabase sign-up failed");
     }
 
-    // If email confirmations are enabled, the user will get an email to confirm
-    if (!signUpData.session) {
-      // No session yet (email confirmation required) — still persist what we can
-      if (signUpData.user.email_confirm_at === null || signUpData.user.confirmed_at === null) {
-        throw new Error("Please check your email to confirm your account before signing in.");
-      }
+    const isEmailVerified = Boolean(
+      (signUpData.user as any).email_confirmed_at || (signUpData.user as any).confirmed_at
+    );
+
+    let session = signUpData.session;
+
+    // With email confirmation OFF (the normal marketplace config), signUp
+    // always returns a session. If it doesn't -- e.g. confirmation got
+    // re-enabled, or a transient issue -- try an immediate sign-in before
+    // giving up, so a real misconfiguration doesn't hard-block real users.
+    if (!session) {
+      const { data: signInData } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password,
+      });
+      session = signInData?.session ?? null;
     }
 
-    const access_token = signUpData.session?.access_token;
+    if (!session?.access_token) {
+      throw new Error(
+        "Your account was created, but email confirmation is required before you can sign in. " +
+        "Please check your inbox for a confirmation link."
+      );
+    }
 
-    if (access_token) {
-      localStorage.setItem(ACCESS_TOKEN_KEY, access_token);
-      setToken(access_token);
+    const access_token = session.access_token;
+    localStorage.setItem(ACCESS_TOKEN_KEY, access_token);
+    setToken(access_token);
 
-      const fetched = await apiRequest<SessionUser>("/auth/supabase/me");
-      const fetchedType: UserType = (fetched as any).user_type || userType || "user";
-      const merged = normalizeUser(fetched, fetchedType);
-      if (merged) {
-        persistSession(access_token, merged, fetchedType);
-        setUser(merged);
-      }
-    } else {
-      const user_obj: SessionUser = {
-        id: signUpData.user.id,
-        name,
-        email: signUpData.user.email,
-        phone: phone || signUpData.user.phone,
-        role: userType === "business" ? "seller" : userType === "logistics" ? "logistics" : "user",
-      };
-      persistSession(signUpData.user.id as unknown as string, user_obj, userType || "user");
-      setUser(user_obj);
+    const fetched = await apiRequest<SessionUser>("/auth/supabase/me");
+    const fetchedType: UserType = (fetched as any).user_type || userType || "user";
+    const merged = normalizeUser({ ...fetched, is_verified: isEmailVerified }, fetchedType);
+    if (merged) {
+      persistSession(access_token, merged, fetchedType);
+      setUser(merged);
     }
   }
 
@@ -424,8 +445,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function resendConfirmationEmail(email: string) {
+    if (!supabase) {
+      throw new Error("Email confirmation is not available for this account type.");
+    }
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: email.trim().toLowerCase(),
+    });
+    if (error) throw error;
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser, verifyEmail }}>
+    <AuthContext.Provider
+      value={{ user, token, loading, login, register, logout, refreshUser, verifyEmail, resendConfirmationEmail }}
+    >
       {children}
     </AuthContext.Provider>
   );
