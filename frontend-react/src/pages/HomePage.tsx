@@ -129,7 +129,6 @@ function resolveImageUrl(url?: string | null) {
 
 export function HomePage() {
   const { token, user, loading } = useAuth();
-  const { openAssistant } = useAIAssistant();
   const { addToCart, setIsOpen } = useCart();
   const navigate = useNavigate();
   const { toggleTheme, effectiveTheme } = useTheme();
@@ -282,12 +281,8 @@ export function HomePage() {
 
   const displayedItems = filteredItems.slice(0, displayCount);
 
-  function activateMode(newMode: "marketplace" | "ai") {
-    if (newMode === "ai") {
-      openAssistant();
-    } else {
-      document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
-    }
+  function scrollToProducts() {
+    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
   }
 
   async function handleSearch() {
@@ -510,17 +505,10 @@ export function HomePage() {
                   className="flex flex-wrap gap-4"
                 >
                   <button
-                    onClick={() => activateMode("marketplace")}
+                    onClick={scrollToProducts}
                     className="h-12 px-8 rounded-2xl bg-white text-dark-bg font-black text-xs uppercase tracking-widest hover:bg-surface-soft hover:scale-[1.03] transition-all active:scale-95 shadow-2xl"
                   >
                     Enter Shop
-                  </button>
-                  <button
-                    onClick={() => activateMode("ai")}
-                    className="h-12 px-8 rounded-2xl bg-white/10 backdrop-blur-md border border-white/25 text-white font-black text-xs uppercase tracking-widest hover:bg-white/20 hover:scale-[1.03] transition-all active:scale-95 inline-flex items-center gap-2 shadow-xl"
-                  >
-                    <Zap size={16} className="fill-current text-brand" />
-                    AI Help
                   </button>
                 </motion.div>
               </div>

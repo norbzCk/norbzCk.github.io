@@ -10,7 +10,6 @@ import {
   User as UserIcon, 
   Moon, 
   Sun, 
-  Zap,
   Menu
 } from "lucide-react";
 import { useState } from "react";
@@ -35,7 +34,6 @@ function getInitials(name?: string) {
 
 export function AppShell() {
   const { user } = useAuth();
-  const { openAssistant } = useAIAssistant();
   const location = useLocation();
   const { effectiveTheme: theme, toggleTheme } = useTheme();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -89,14 +87,6 @@ export function AppShell() {
             </div>
 
             <div className="flex items-center gap-2 md:gap-4">
-              <button
-                onClick={openAssistant}
-                className="group relative flex h-10 items-center gap-2 overflow-hidden rounded-xl bg-brand px-4 text-xs font-bold text-white shadow-lg transition-all hover:bg-brand-strong md:h-12 md:text-sm"
-              >
-                <Zap size={16} className="fill-current" />
-                <span className="hidden sm:inline">Ask AI Assistant</span>
-              </button>
-
               <div className="h-8 w-px bg-border mx-1 hidden md:block" />
 
               <div className="flex items-center gap-1 md:gap-2">
