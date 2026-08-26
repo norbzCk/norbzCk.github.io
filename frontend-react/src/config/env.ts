@@ -29,8 +29,24 @@ function resolveDefaultApiBase() {
   return origin.replace(/\/+$/, "");
 }
 
+function resolveDefaultAgentApiBase() {
+  if (typeof window === "undefined") {
+    return "http://localhost:8001";
+  }
+
+  const { hostname } = window.location;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "http://localhost:8001";
+  }
+
+  // Deployed — the standalone agent service on Render
+  return "https://sokolink-agent.onrender.com";
+}
+
 export const env = {
   apiBase: (import.meta.env.VITE_API_BASE || resolveDefaultApiBase()).replace(/\/+$/, ""),
+  agentApiBase: (import.meta.env.VITE_AGENT_API_BASE || resolveDefaultAgentApiBase()).replace(/\/+$/, ""),
   supabaseUrl: import.meta.env.VITE_SUPABASE_URL || "",
   supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || "",
 };
