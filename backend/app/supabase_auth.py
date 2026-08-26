@@ -65,7 +65,7 @@ def verify_supabase_token(token: str) -> dict:
         payload = jwt.decode(
             token,
             signing_key.key,
-            algorithms=["HS256"],
+            algorithms=["ES256", "RS256"],
             audience="authenticated",
         )
         return payload
