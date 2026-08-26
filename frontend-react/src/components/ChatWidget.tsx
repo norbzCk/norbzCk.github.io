@@ -8,6 +8,50 @@ interface ChatMessage {
   text: string;
 }
 
+/**
+ * Minimal Markdown renderer for agent replies: bold, italic, bullet
+ * lists, and line breaks. Deliberately not a full Markdown library
+ * (react-markdown, etc.) -- the model only ever needs these few
+ * constructs for chat replies, and a tiny custom parser keeps bundle
+ * size down instead of pulling in a full dependency for it.
+ */
+function renderFormattedText(text: string): React.ReactNode {
+  const lines = text.split("\n");
+
+  return lines.map((line, lineIndex) => {
+    const isBullet = /^\s*[-*]\s+/.test(line);
+    const content = isBullet ? line.replace(/^\s*[-*]\s+/, "") : line;
+    const parts = parseInline(content);
+
+    return (
+      <span key={lineIndex}>
+        {isBullet && <span className="mr-1.5">•</span>}
+        {parts}
+        {lineIndex < lines.length - 1 && <br />}
+      </span>
+    );
+  });
+}
+
+function parseInline(text: string): React.ReactNode[] {
+  // Order matters: bold (**text**) checked before single-asterisk italic
+  const tokenRegex = /(\*\*.+?\*\*|\*.+?\*|_.+?_)/g;
+  const segments = text.split(tokenRegex).filter((s) => s.length > 0);
+
+  return segments.map((segment, i) => {
+    if (segment.startsWith("**") && segment.endsWith("**")) {
+      return <strong key={i}>{segment.slice(2, -2)}</strong>;
+    }
+    if (
+      (segment.startsWith("*") && segment.endsWith("*")) ||
+      (segment.startsWith("_") && segment.endsWith("_"))
+    ) {
+      return <em key={i}>{segment.slice(1, -1)}</em>;
+    }
+    return <span key={i}>{segment}</span>;
+  });
+}
+
 const SESSION_KEY = "sokolink_agent_session_id";
 
 function getOrCreateSessionId(): string {
@@ -122,7 +166,7 @@ export function ChatWidget() {
                       : "bg-surface-soft text-text rounded-bl-sm"
                   }`}
                 >
-                  {m.text}
+                  {m.role === "agent" ? renderFormattedText(m.text) : m.text}
                 </div>
               </div>
             ))}
