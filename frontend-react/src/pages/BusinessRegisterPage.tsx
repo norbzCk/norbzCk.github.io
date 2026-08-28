@@ -1,68 +1,59 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AuthScene } from "../components/AuthScene";
-import { persistSession } from "../features/auth/authStorage";
-import type { SessionUser } from "../types/auth";
 import { apiRequest } from "../lib/http";
-import { useAuth } from "../features/auth/AuthContext";
 
 export function BusinessRegisterPage() {
+  const navigate = useNavigate();
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { register: supabaseRegister } = useAuth();
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    setLogoFile(file);
+    if (file) {
+      setLogoPreview(URL.createObjectURL(file));
+    } else {
+      setLogoPreview(null);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    setSuccess("");
     setIsSubmitting(true);
 
     const form = new FormData(event.currentTarget);
-    const payload = {
-      business_name: String(form.get("business_name") || "").trim(),
-      owner_name: String(form.get("owner_name") || "").trim(),
-      email: String(form.get("email") || "").trim().toLowerCase(),
-      phone: String(form.get("phone") || "").trim(),
-      password: String(form.get("password") || ""),
-      business_type: String(form.get("business_type") || "individual"),
-      category: String(form.get("category") || "").trim() || null,
-      description: String(form.get("description") || "").trim() || null,
-      region: String(form.get("region") || "Dar es Salaam"),
-      area: String(form.get("area") || "").trim() || null,
-      street: String(form.get("street") || "").trim() || null,
-      shop_number: String(form.get("shop_number") || "").trim() || null,
-      operating_hours: String(form.get("operating_hours") || "").trim() || null,
-      shop_logo_url: String(form.get("shop_logo_url") || "").trim() || null,
-      shop_images: String(form.get("shop_images") || "").trim() || null,
-      role: "seller",
-    };
+    // FormData already picked up every named <input>/<select> in the form,
+    // including the file input (name="logo") if one was chosen -- just
+    // trim the text fields in place rather than rebuilding the payload.
+    for (const key of ["business_name", "owner_name", "email", "phone", "area", "street", "shop_number", "operating_hours", "description"]) {
+      const value = form.get(key);
+      if (typeof value === "string") form.set(key, value.trim());
+    }
+    const emailValue = String(form.get("email") || "").toLowerCase();
+    form.set("email", emailValue);
 
     try {
-      // Step 1: Create a Supabase Auth account (handles email verification, password reset)
-      await supabaseRegister({
-        name: payload.business_name,
-        email: payload.email,
-        password: payload.password,
-        phone: payload.phone,
-        userType: "business",
-      });
-
-      // Step 2: Create the detailed BusinessUser record in the app DB
-      const data = await apiRequest<{ user?: SessionUser }>("/business/register", {
+      // Single call: /business/register creates the account, sets auth
+      // cookies, and returns its own access token -- it doesn't need (and
+      // previously was broken by) a separate pre-registration step.
+      await apiRequest("/business/register", {
         method: "POST",
-        body: payload,
+        body: form,
+        auth: false,
       });
 
-      if (data.user) {
-        persistSession(localStorage.getItem("access_token") || "", { ...data.user, role: "seller" }, "business");
-      }
-      setSuccess("Business registered successfully.");
-      setTimeout(() => {
-        window.location.href = "/app/seller";
-      }, 900);
+      // Redirect to login rather than auto-logging in: keeps registration
+      // and authentication as two clearly separate steps, and avoids ever
+      // risking a mismatched session (the bug this used to have, where the
+      // stored token didn't match the account that was actually created).
+      navigate("/login?registered=seller", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
-    } finally {
       setIsSubmitting(false);
     }
   }
@@ -111,20 +102,11 @@ export function BusinessRegisterPage() {
           </div>
         ) : null}
 
-        {success ? (
-          <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl font-bold flex items-center gap-3 border border-emerald-100">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            {success}
-          </div>
-        ) : null}
-
         <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleSubmit}>
           <InputField name="business_name" label="Business Name" required placeholder="E.g. Soko Retailers" />
           <InputField name="owner_name" label="Owner Name" required placeholder="Full Name" />
-          <InputField name="email" label="Email Address" type="email" required placeholder="business@example.com" />
-          <InputField name="phone" label="Phone Number" required placeholder="07..." />
+          <InputField name="email" label="Email Address" type="email" placeholder="business@example.com" />
+          <InputField name="phone" label="Phone Number" required placeholder="0712345678" />
           
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Business Type</label>
@@ -140,14 +122,39 @@ export function BusinessRegisterPage() {
           <InputField name="street" label="Street Address" />
           <InputField name="shop_number" label="Shop Number" />
           <InputField name="operating_hours" label="Operating Hours" placeholder="Mon-Sat 08:00-18:00" />
-          <InputField name="shop_logo_url" label="Shop Logo URL" />
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Shop Logo</label>
+            <div className="flex items-center gap-3">
+              {logoPreview ? (
+                <img src={logoPreview} alt="Logo preview" className="h-12 w-12 rounded-xl object-cover border-2 border-slate-100" />
+              ) : (
+                <div className="h-12 w-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300 text-lg font-black">?</div>
+              )}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-1 px-4 py-3 bg-slate-50 border-2 border-dashed border-slate-200 hover:border-brand/40 rounded-xl outline-none transition-all font-semibold text-sm text-slate-500 text-left truncate"
+              >
+                {logoFile ? logoFile.name : "Choose an image..."}
+              </button>
+              <input
+                ref={fileInputRef}
+                name="logo"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={handleLogoChange}
+                className="hidden"
+              />
+            </div>
+          </div>
           
           <div className="md:col-span-2">
             <InputField name="description" label="Business Description" placeholder="Describe your business and what you sell..." />
           </div>
           
           <div className="md:col-span-2">
-            <InputField name="password" label="Password" type="password" required placeholder="••••••••" />
+            <InputField name="password" label="Password" type="password" required placeholder="At least 8 characters, with a number and symbol" />
           </div>
 
           <div className="md:col-span-2 pt-4">

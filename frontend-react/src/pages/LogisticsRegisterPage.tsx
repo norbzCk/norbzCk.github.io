@@ -1,62 +1,46 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AuthScene } from "../components/AuthScene";
-import { persistSession } from "../features/auth/authStorage";
-import type { SessionUser } from "../types/auth";
 import { apiRequest } from "../lib/http";
-import { useAuth } from "../features/auth/AuthContext";
 
 export function LogisticsRegisterPage() {
+  const navigate = useNavigate();
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { register: supabaseRegister } = useAuth();
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    setPhotoFile(file);
+    setPhotoPreview(file ? URL.createObjectURL(file) : null);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    setSuccess("");
     setIsSubmitting(true);
 
     const form = new FormData(event.currentTarget);
-    const payload = {
-      name: String(form.get("name") || "").trim(),
-      phone: String(form.get("phone") || "").trim(),
-      email: String(form.get("email") || "").trim().toLowerCase(),
-      password: String(form.get("password") || ""),
-      account_type: String(form.get("account_type") || "individual"),
-      vehicle_type: String(form.get("vehicle_type") || "").trim(),
-      plate_number: String(form.get("plate_number") || "").trim(),
-      license_number: String(form.get("license_number") || "").trim(),
-      base_area: String(form.get("base_area") || "").trim(),
-      coverage_areas: String(form.get("coverage_areas") || "").trim(),
-    };
+    for (const key of ["name", "phone", "vehicle_type", "plate_number", "license_number", "base_area", "coverage_areas"]) {
+      const value = form.get(key);
+      if (typeof value === "string") form.set(key, value.trim());
+    }
+    form.set("email", String(form.get("email") || "").trim().toLowerCase());
 
     try {
-      // Step 1: Create a Supabase Auth account
-      await supabaseRegister({
-        name: payload.name,
-        email: payload.email,
-        password: payload.password,
-        phone: payload.phone,
-        userType: "logistics",
-      });
-
-      // Step 2: Create the detailed LogisticsUser record in the app DB
-      const data = await apiRequest<{ user?: SessionUser }>("/logistics/register", {
+      // Single call: /logistics/register creates the account and sets auth
+      // cookies itself -- no separate pre-registration step needed.
+      await apiRequest("/logistics/register", {
         method: "POST",
-        body: payload,
+        body: form,
+        auth: false,
       });
 
-      if (data.user) {
-        persistSession(localStorage.getItem("access_token") || "", { ...data.user, role: "logistics" }, "logistics");
-      }
-      setSuccess("Logistics account registered successfully.");
-      setTimeout(() => {
-        window.location.href = "/app/logistics";
-      }, 900);
+      navigate("/login?registered=logistics", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
-    } finally {
       setIsSubmitting(false);
     }
   }
@@ -84,7 +68,6 @@ export function LogisticsRegisterPage() {
       </div>
 
       {error ? <div className="p-4 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-xl font-bold flex items-center gap-3 border border-red-100 dark:border-red-800">{error}</div> : null}
-      {success ? <div className="p-4 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold flex items-center gap-3 border border-emerald-100 dark:border-emerald-800">{success}</div> : null}
 
       <form className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6" onSubmit={handleSubmit}>
         <label className="block space-y-2">
@@ -93,15 +76,15 @@ export function LogisticsRegisterPage() {
         </label>
         <label className="block space-y-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Phone</span>
-          <input className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="phone" required />
+          <input className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="phone" required placeholder="0712345678" />
         </label>
         <label className="block space-y-2">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Email</span>
-          <input type="email" className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="email" required />
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Email (optional)</span>
+          <input type="email" className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="email" />
         </label>
         <label className="block space-y-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Password</span>
-          <input type="password" className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="password" required minLength={8} />
+          <input type="password" className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="password" required minLength={8} placeholder="At least 8 characters, with a number and symbol" />
         </label>
         <label className="block space-y-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Account type</span>
@@ -129,6 +112,31 @@ export function LogisticsRegisterPage() {
         <label className="block md:col-span-2 space-y-2">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Coverage areas</span>
           <input className="mt-1 block w-full rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm focus:border-brand focus:ring-1 focus:ring-brand" name="coverage_areas" placeholder="Comma separated, e.g. Sinza, Magomeni" />
+        </label>
+        <label className="block md:col-span-2 space-y-2">
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Profile photo (optional)</span>
+          <div className="flex items-center gap-3">
+            {photoPreview ? (
+              <img src={photoPreview} alt="Profile preview" className="h-12 w-12 rounded-full object-cover border-2 border-slate-100 dark:border-slate-600" />
+            ) : (
+              <div className="h-12 w-12 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-slate-300 text-lg font-black">?</div>
+            )}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex-1 rounded-lg border border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-4 py-3 text-sm font-medium text-slate-500 dark:text-slate-400 text-left truncate hover:border-brand/40"
+            >
+              {photoFile ? photoFile.name : "Choose an image..."}
+            </button>
+            <input
+              ref={fileInputRef}
+              name="profile_photo"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={handlePhotoChange}
+              className="hidden"
+            />
+          </div>
         </label>
         <button className="md:col-span-2 px-6 py-3 bg-brand text-white rounded-xl hover:bg-brand/90 transition-all font-medium text-sm shadow-lg" disabled={isSubmitting} type="submit">
           {isSubmitting ? "Submitting..." : "Register logistics"}

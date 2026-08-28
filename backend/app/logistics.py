@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Header, Request, Response, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,7 +19,8 @@ from backend.app.schemas import (
     LogisticsRegister, LogisticsLogin, LogisticsProfile,
     DeliveryOrderCreate, DeliveryOrderResponse, DeliveryStatusUpdate
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security, validate_password_strength, validate_phone_format
+from backend.utils.uploads import save_uploaded_image
 from backend.app.business import get_current_business_user
 from backend.app.notification_service import build_login_email, create_notification, resolve_subject
 from backend.app.order_runtime import ensure_order_thread, log_order_status, record_audit, record_shipment_event, update_reservation_status
@@ -142,33 +143,60 @@ def get_current_logistics_user(
 
 
 @router.post("/register")
-def register_logistics(
-    payload: LogisticsRegister,
+async def register_logistics(
     background_tasks: BackgroundTasks,
     response: Response,
     request: Request,
     db: Session = Depends(get_db),
+    name: str = Form(...),
+    phone: str = Form(...),
+    email: str | None = Form(None),
+    password: str = Form(...),
+    account_type: str = Form("individual"),
+    vehicle_type: str | None = Form(None),
+    plate_number: str | None = Form(None),
+    license_number: str | None = Form(None),
+    base_area: str | None = Form(None),
+    coverage_areas: str | None = Form(None),
+    profile_photo: UploadFile | None = File(None),
 ):
     from backend.app.supabase_auth import extract_supabase_uid_from_request
     supabase_uid = extract_supabase_uid_from_request(request, db)
 
-    existing = _get_logistics_user(db, payload.phone)
-    if existing:
+    name = name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Name must be at least 2 characters")
+
+    validate_password_strength(password)
+    phone = validate_phone_format(phone)
+
+    normalized_email = (email or "").strip().lower() or None
+
+    if _get_logistics_user(db, phone=phone):
         raise HTTPException(status_code=400, detail="Phone number already registered")
-    
-    pw_hash = hash_password(payload.password)
+    if normalized_email:
+        existing_email = db.query(LogisticsUser).filter(func.lower(LogisticsUser.email) == normalized_email).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    profile_photo_url = None
+    if profile_photo is not None and profile_photo.filename:
+        profile_photo_url = await save_uploaded_image(profile_photo)
+
+    pw_hash = hash_password(password)
     
     user = LogisticsUser(
-        name=payload.name.strip(),
-        phone=payload.phone.strip(),
-        email=(payload.email or "").strip().lower() or None,
+        name=name,
+        phone=phone,
+        email=normalized_email,
         password_hash=pw_hash,
-        account_type=payload.account_type,
-        vehicle_type=payload.vehicle_type,
-        plate_number=payload.plate_number,
-        license_number=payload.license_number,
-        base_area=payload.base_area,
-        coverage_areas=payload.coverage_areas,
+        account_type=account_type,
+        vehicle_type=(vehicle_type or "").strip() or None,
+        plate_number=(plate_number or "").strip() or None,
+        license_number=(license_number or "").strip() or None,
+        base_area=(base_area or "").strip() or None,
+        coverage_areas=(coverage_areas or "").strip() or None,
+        profile_photo=profile_photo_url,
         supabase_uid=supabase_uid,
     )
     db.add(user)

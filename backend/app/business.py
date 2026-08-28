@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, date, timezone
 import os
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Header, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Header, Request, Response, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -28,7 +28,8 @@ from backend.app.schemas import (
     BusinessRegister, BusinessLogin, BusinessProfile,
     BusinessUpdate, BusinessVerificationSubmit
 )
-from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security
+from backend.app.auth import hash_password, verify_password, verify_and_upgrade_password, create_access_token as create_token, create_refresh_token, set_auth_cookies, decode_token, _normalize_phone, _phone_matches, get_current_user, security, validate_password_strength, validate_phone_format
+from backend.utils.uploads import save_uploaded_image
 from backend.app.notification_service import build_login_email, create_notification, list_notifications_for_subject, resolve_subject, serialize_notification
 from backend.app.notifications import enqueue_broadcast
 from backend.app.order_runtime import (
@@ -299,39 +300,89 @@ def _get_business_user(db: Session, phone: str = None, email: str = None):
 
 
 @router.post("/register")
-def register_business(
-    payload: BusinessRegister,
+async def register_business(
     background_tasks: BackgroundTasks,
     response: Response,
     request: Request,
     db: Session = Depends(get_db),
+    business_name: str = Form(...),
+    owner_name: str = Form(...),
+    phone: str = Form(...),
+    email: str | None = Form(None),
+    password: str = Form(...),
+    business_type: str = Form("individual"),
+    category: str | None = Form(None),
+    description: str | None = Form(None),
+    region: str = Form("Dar es Salaam"),
+    area: str | None = Form(None),
+    street: str | None = Form(None),
+    shop_number: str | None = Form(None),
+    operating_hours: str | None = Form(None),
+    shop_images: str | None = Form(None),
+    website_url: str | None = Form(None),
+    social_facebook: str | None = Form(None),
+    social_instagram: str | None = Form(None),
+    social_whatsapp: str | None = Form(None),
+    social_x: str | None = Form(None),
+    logo: UploadFile | None = File(None),
 ):
+    """Multipart, not JSON: lets a brand-new seller (no account/token yet,
+    so an auth-gated upload endpoint is a chicken-and-egg problem) attach a
+    real logo file in the same request that creates their account, instead
+    of pasting an image URL.
+
+    Note: `role` is deliberately NOT an accepted field here anymore. The
+    old BusinessRegister schema had `role: str = "seller"` and passed
+    whatever the client sent straight into the new BusinessUser row with
+    no restriction -- a public, unauthenticated endpoint that would accept
+    role="super_admin" from any caller. Every account created here is a
+    seller, full stop; no client input can change that.
+    """
     from backend.app.supabase_auth import extract_supabase_uid_from_request
     supabase_uid = extract_supabase_uid_from_request(request, db)
 
-    existing = _get_business_user(db, payload.phone)
-    if existing:
+    business_name = business_name.strip()
+    owner_name = owner_name.strip()
+    if len(business_name) < 2:
+        raise HTTPException(status_code=400, detail="Business name must be at least 2 characters")
+    if len(owner_name) < 2:
+        raise HTTPException(status_code=400, detail="Owner name must be at least 2 characters")
+
+    validate_password_strength(password)
+    phone = validate_phone_format(phone)
+
+    normalized_email = (email or "").strip().lower() or None
+
+    if _get_business_user(db, phone=phone):
         raise HTTPException(status_code=400, detail="Phone number already registered")
-    
-    pw_hash = hash_password(payload.password)
-    
+    if normalized_email:
+        existing_email = db.query(BusinessUser).filter(func.lower(BusinessUser.email) == normalized_email).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    shop_logo_url = None
+    if logo is not None and logo.filename:
+        shop_logo_url = await save_uploaded_image(logo)
+
+    pw_hash = hash_password(password)
+
     user = BusinessUser(
-        business_name=payload.business_name.strip(),
-        owner_name=payload.owner_name.strip(),
-        phone=payload.phone.strip(),
-        email=(payload.email or "").strip().lower() or None,
+        business_name=business_name,
+        owner_name=owner_name,
+        phone=phone,
+        email=normalized_email,
         password_hash=pw_hash,
-        business_type=payload.business_type,
-        category=payload.category,
-        description=payload.description,
-        region=payload.region,
-        area=payload.area,
-        street=payload.street,
-        shop_number=payload.shop_number,
-        operating_hours=payload.operating_hours,
-        shop_logo_url=payload.shop_logo_url,
-        shop_images=payload.shop_images,
-        role=payload.role,
+        business_type=business_type,
+        category=(category or "").strip() or None,
+        description=(description or "").strip() or None,
+        region=region,
+        area=(area or "").strip() or None,
+        street=(street or "").strip() or None,
+        shop_number=(shop_number or "").strip() or None,
+        operating_hours=(operating_hours or "").strip() or None,
+        shop_logo_url=shop_logo_url,
+        shop_images=(shop_images or "").strip() or None,
+        role="seller",
         supabase_uid=supabase_uid,
     )
     db.add(user)

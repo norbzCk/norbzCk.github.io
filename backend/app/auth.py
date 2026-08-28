@@ -58,6 +58,22 @@ def validate_password_strength(password: str):
         raise HTTPException(status_code=400, detail="Password must contain at least one special character")
 
 
+def validate_phone_format(phone: str) -> str:
+    """Accepts Tanzanian mobile formats: +255XXXXXXXXX, 255XXXXXXXXX, or
+    0XXXXXXXXX (9 digits after the prefix). Returns the phone normalized to
+    +255XXXXXXXXX. Previously NONE of the registration endpoints validated
+    phone format at all -- only uniqueness -- so "abc", "123", or an empty
+    string were all silently accepted as a phone number."""
+    digits_only = re.sub(r"[^\d+]", "", phone or "")
+    match = re.fullmatch(r"(?:\+?255|0)(\d{9})", digits_only)
+    if not match:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a valid Tanzanian phone number, e.g. 0712345678 or +255712345678",
+        )
+    return f"+255{match.group(1)}"
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120_000)
@@ -530,6 +546,7 @@ def register(
 
     phone = (payload.get("phone") or "").strip() or None
     if phone:
+        phone = validate_phone_format(phone)
         existing_phone = db.query(User).filter(User.phone == phone).first()
         if existing_phone:
             raise HTTPException(status_code=400, detail="Phone number already registered")
@@ -609,7 +626,8 @@ def register_customer(
     if not name or not phone or not password:
         raise HTTPException(status_code=400, detail="Name, phone and password are required")
     validate_password_strength(password)
-    
+    phone = validate_phone_format(phone)
+
     existing = db.query(User).filter(User.phone == phone).first()
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already registered")

@@ -713,6 +713,7 @@ def build_superadmin_overview(db: Session) -> dict[str, Any]:
             {
                 "id": item.id,
                 "product": item.product,
+                "category": item.category,
                 "seller_id": item.seller_id,
                 "provider_name": item.provider_name,
                 "status": item.status,

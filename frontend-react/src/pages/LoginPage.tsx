@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { 
   User, 
@@ -8,6 +8,7 @@ import {
   EyeOff, 
   ArrowRight, 
   AlertCircle,
+  CheckCircle2,
   Loader2
 } from "lucide-react";
 import { AuthScene } from "../components/AuthScene";
@@ -17,6 +18,13 @@ import { getPostLoginPath } from "../features/auth/authStorage";
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const registeredAs = searchParams.get("registered");
+  const welcomeMessages: Record<string, string> = {
+    seller: "Your business account was created. Sign in to set up your storefront.",
+    customer: "Your account was created. Sign in to start shopping.",
+    logistics: "Your logistics account was created. Sign in to go online and start accepting deliveries.",
+  };
   const { login } = useAuth();
   const { sendSmsOtp, verifySmsOtp } = useAuth() as any;
   const [error, setError] = useState("");
@@ -79,6 +87,17 @@ export function LoginPage() {
           <h2 className="text-3xl font-display font-black text-text tracking-tight">Sign In</h2>
           <p className="text-text-muted font-medium">Welcome back to the smart marketplace.</p>
         </div>
+
+        {registeredAs && welcomeMessages[registeredAs] && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-4 bg-emerald-500/10 text-emerald-600 rounded-2xl font-bold flex items-center gap-3 border border-emerald-500/20 text-sm"
+          >
+            <CheckCircle2 size={18} />
+            Welcome to SokoLnk! {welcomeMessages[registeredAs]}
+          </motion.div>
+        )}
 
         {error && (
           <motion.div 

@@ -119,7 +119,7 @@ def auth_header(token):
 
 class TestLogisticsRegister:
     def test_register_logistics_success(self, client, db):
-        response = client.post("/logistics/register", json={
+        response = client.post("/logistics/register", data={
             "name": "New Rider",
             "phone": "+255700000500",
             "email": "newrider@test.com",
@@ -137,13 +137,29 @@ class TestLogisticsRegister:
         assert data["userType"] == "logistics"
 
     def test_register_logistics_duplicate_phone(self, client, db, logistics_user):
-        response = client.post("/logistics/register", json={
+        response = client.post("/logistics/register", data={
             "name": "Another Rider",
             "phone": "+255700000400",
             "email": "another@test.com",
             "password": "TestPass1!",
             "account_type": "individual",
             "vehicle_type": "motorcycle",
+        })
+        assert response.status_code == 400
+
+    def test_register_logistics_weak_password(self, client, db):
+        response = client.post("/logistics/register", data={
+            "name": "Weak Pass Rider",
+            "phone": "+255700000501",
+            "password": "weak",
+        })
+        assert response.status_code == 400
+
+    def test_register_logistics_invalid_phone(self, client, db):
+        response = client.post("/logistics/register", data={
+            "name": "Bad Phone Rider",
+            "phone": "123",
+            "password": "TestPass1!",
         })
         assert response.status_code == 400
 

@@ -1,19 +1,16 @@
 import { FormEvent, useState } from "react";
 import { AuthScene } from "../components/AuthScene";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../features/auth/AuthContext";
+import { apiRequest } from "../lib/http";
 
 export function CustomerRegisterPage() {
   const navigate = useNavigate();
-  const { register } = useAuth();
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    setSuccess("");
     setIsSubmitting(true);
 
     const form = new FormData(event.currentTarget);
@@ -22,16 +19,21 @@ export function CustomerRegisterPage() {
       email: String(form.get("email") || "").trim().toLowerCase(),
       phone: String(form.get("phone") || "").trim(),
       password: String(form.get("password") || ""),
-      userType: "user" as const,
     };
 
     try {
-      await register(payload);
-      setSuccess("Customer registered successfully.");
-      setTimeout(() => navigate("/app/customer"), 900);
+      // Called directly rather than through AuthContext's register(), which
+      // auto-persists a session on success -- registration and signing in
+      // are kept as two separate steps here, consistent with the seller
+      // and logistics registration flows.
+      await apiRequest("/auth/register", {
+        method: "POST",
+        body: payload,
+        auth: false,
+      });
+      navigate("/login?registered=customer", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
-    } finally {
       setIsSubmitting(false);
     }
   }
@@ -63,15 +65,6 @@ export function CustomerRegisterPage() {
               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
             </svg>
             {error}
-          </div>
-        ) : null}
-
-        {success ? (
-          <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl font-bold flex items-center gap-3 border border-emerald-100 animate-in fade-in slide-in-from-top-2">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            {success}
           </div>
         ) : null}
 

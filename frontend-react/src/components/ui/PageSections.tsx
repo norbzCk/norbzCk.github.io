@@ -66,14 +66,16 @@ export function SectionCard({
   description,
   action,
   children,
+  className,
 }: {
   title: string;
   description?: string;
   action?: ReactNode;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="glass-card overflow-hidden">
+    <section className={`glass-card overflow-hidden${className ? ` ${className}` : ""}`}>
       <div className="flex flex-col gap-4 border-b border-border bg-surface-soft/30 px-8 py-6 md:flex-row md:items-center md:justify-between">
         <div className="space-y-1">
           <h2 className="font-display text-2xl font-black tracking-tight text-text">{title}</h2>

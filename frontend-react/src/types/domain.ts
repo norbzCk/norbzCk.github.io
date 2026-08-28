@@ -377,7 +377,6 @@ export interface SuperadminOverview {
   pending_business_verifications: number;
   pending_logistics_verifications: number;
   pending_user_verifications: number;
-  pending_user_verifications: number;
   seller_leaderboard: Array<{
     id: number;
     business_name: string;
@@ -396,6 +395,7 @@ export interface SuperadminOverview {
   recent_orders: Array<{
     id: number;
     product?: string | null;
+    category?: string | null;
     provider_name?: string | null;
     status?: string | null;
     quantity?: number;

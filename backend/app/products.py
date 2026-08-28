@@ -13,13 +13,12 @@ from backend.app.marketplace_intelligence import (
     refresh_business_metrics,
 )
 from backend.models import BusinessUser, Product, Provider, User, BusinessMetrics
-from backend.app.schemas import (
-    ProductCreate, ProductSearchQuery, 
+from backend.app.schemas import (ProductCreate, ProductSearchQuery, 
     AISuggestRequest, AISuggestResponse
 )
+from backend.utils.uploads import save_uploaded_image
 
 router = APIRouter(prefix="/products", tags=["Products"])
-ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 @router.post("/ai-suggest", response_model=AISuggestResponse)
@@ -122,25 +121,8 @@ async def upload_product_image(
     file: UploadFile = File(...),
     _: User | BusinessUser = Depends(require_roles("seller", "admin", "super_admin", "owner")),
 ):
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in ALLOWED_IMAGE_EXT:
-        raise HTTPException(status_code=400, detail="Unsupported image format")
-    if not (file.content_type or "").startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-
-    uploads_dir = Path(__file__).resolve().parents[1] / "uploads"
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}{suffix}"
-    destination = uploads_dir / filename
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
-
-    destination.write_bytes(content)
-    return {"image_url": f"/uploads/{filename}"}
+    image_url = await save_uploaded_image(file)
+    return {"image_url": image_url}
 
 @router.get("/")
 def get_products(

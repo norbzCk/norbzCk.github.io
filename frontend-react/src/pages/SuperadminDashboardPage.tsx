@@ -660,9 +660,9 @@ export function SuperadminDashboardPage() {
                     <div className="flex flex-col gap-1">
                       {activeTab === 'customers' && (
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider w-fit ${
-                          item.is_verified ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                          ('is_verified' in item && item.is_verified) ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
                         }`}>
-                          {item.is_verified ? 'Confirmed' : 'Unconfirmed'}
+                          {('is_verified' in item && item.is_verified) ? 'Confirmed' : 'Unconfirmed'}
                         </span>
                       )}
                       {activeTab === 'businessmen' && (

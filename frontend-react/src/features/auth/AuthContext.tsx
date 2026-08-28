@@ -432,7 +432,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function verifyEmail(token: string) {
     if (supabase) {
       const { error } = await supabase.auth.verifyOtp({
-        token,
+        token_hash: token,
         type: "email",
       });
       if (error) throw error;
