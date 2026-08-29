@@ -174,7 +174,7 @@ export function ChatWidget() {
               <div className="flex justify-start">
                 <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm bg-surface-soft px-3 py-2 text-sm text-text-muted">
                   <Loader2 size={14} className="animate-spin" />
-                  💡 Agent is responding...
+                  💭Agent is responding...
                 </div>
               </div>
             )}
