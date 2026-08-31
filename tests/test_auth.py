@@ -111,6 +111,27 @@ class TestRegister:
         })
         assert response.status_code == 400
 
+    def test_register_user_can_login_immediately_without_email_confirmation(self, client, db):
+        """Regression test: registration used to set is_verified=False and
+        login rejected unverified customers with 401 'Please confirm your
+        email before signing in'. Both the flag and the login gate were
+        removed -- a freshly registered account must be usable right away."""
+        register = client.post("/auth/register", json={
+            "name": "Instant User",
+            "email": "instantuser@example.com",
+            "phone": "+255700000250",
+            "password": "TestPass1!",
+        })
+        assert register.status_code == 200
+        assert register.json()["user"].get("is_verified", True) is not False
+
+        login = client.post("/auth/login", json={
+            "email": "instantuser@example.com",
+            "password": "TestPass1!",
+        })
+        assert login.status_code == 200
+        assert "access_token" in login.json()
+
     def test_register_user_short_name(self, client, db):
         response = client.post("/auth/register", json={
             "name": "A",
@@ -198,6 +219,47 @@ class TestLogin:
             "password": "TestPass1!",
         })
         assert response.status_code == 200
+
+    def test_login_by_phone_canonical_format(self, client, db, registered_user):
+        """Regression test: _normalize_phone used to strip to digits-only
+        (255700000100), which no longer matched the +255-prefixed format
+        registration stores -- phone login was silently broken for every
+        account type while email login kept working undetected."""
+        response = client.post("/auth/login", json={
+            "phone": "+255700000100",
+            "password": "TestPass1!",
+        })
+        assert response.status_code == 200
+
+    def test_login_by_phone_local_format(self, client, db, registered_user):
+        response = client.post("/auth/login", json={
+            "phone": "0700000100",
+            "password": "TestPass1!",
+        })
+        assert response.status_code == 200
+
+    def test_login_by_phone_no_plus_format(self, client, db, registered_user):
+        response = client.post("/auth/login", json={
+            "phone": "255700000100",
+            "password": "TestPass1!",
+        })
+        assert response.status_code == 200
+
+    def test_login_business_by_phone(self, client, db, registered_business):
+        response = client.post("/auth/login", json={
+            "phone": "0700000101",
+            "password": "TestPass1!",
+        })
+        assert response.status_code == 200
+        assert response.json()["userType"] == "business"
+
+    def test_login_logistics_by_phone(self, client, db, registered_logistics):
+        response = client.post("/auth/login", json={
+            "phone": "0700000102",
+            "password": "TestPass1!",
+        })
+        assert response.status_code == 200
+        assert response.json()["userType"] == "logistics"
         data = response.json()
         assert data["userType"] == "logistics"
 

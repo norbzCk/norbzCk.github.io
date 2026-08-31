@@ -436,7 +436,15 @@ class TestProductCategories:
 
 
 class TestProductImageUpload:
-    def test_upload_product_image(self, client, db, seller_user):
+    def test_upload_product_image(self, client, db, seller_user, monkeypatch):
+        # save_uploaded_image now uploads to Supabase Storage -- mock it so
+        # this test verifies the endpoint's own auth/wiring rather than
+        # depending on real Supabase credentials and network access.
+        async def fake_save_uploaded_image(file):
+            return "https://fake-supabase-url.test/storage/v1/object/public/product-images/test.jpg"
+
+        monkeypatch.setattr("backend.app.products.save_uploaded_image", fake_save_uploaded_image)
+
         login = login_as(client, "seller@test.com", "TestPass1!")
         token = login.json()["access_token"]
 

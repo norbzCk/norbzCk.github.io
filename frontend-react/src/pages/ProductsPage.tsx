@@ -294,11 +294,6 @@ export function ProductsPage() {
       return;
     }
 
-    if (!editingId && !user?.is_verified) {
-      setError("Please verify your email before listing products.");
-      return;
-    }
-
     try {
       if (editingId) {
         await apiRequest(`/products/${editingId}`, { method: "PUT", body: payload });
@@ -472,10 +467,6 @@ export function ProductsPage() {
             <h2 className="text-2xl font-display font-black text-text tracking-tight">Product Management</h2>
             <button 
               onClick={() => {
-                if (!user?.is_verified) {
-                  setError("Please verify your email before listing products. Check the banner above to resend the confirmation email.");
-                  return;
-                }
                 setError("");
                 setShowForm(!showForm);
               }}
@@ -569,34 +560,23 @@ export function ProductsPage() {
                     </div>
 
                     <div className="md:col-span-2 space-y-4">
-                      <label className="text-[11px] font-black uppercase tracking-widest text-text-muted ml-1">Product Assets</label>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="relative group/upload">
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            id="image-upload"
-                            onChange={handleImageUpload}
-                            disabled={uploadingImage}
-                          />
-                          <label 
-                            htmlFor="image-upload"
-                            className="flex flex-col items-center justify-center gap-3 w-full h-32 rounded-2xl border-2 border-dashed border-border bg-surface-soft/50 hover:bg-surface-soft hover:border-brand transition-all cursor-pointer"
-                          >
-                            <Upload size={24} className={uploadingImage ? "animate-bounce text-brand" : "text-text-muted"} />
-                            <span className="text-xs font-bold text-text-muted">{uploadingImage ? "Uploading..." : "Click to Upload Photo"}</span>
-                          </label>
-                        </div>
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            placeholder="Or paste high-res image URL"
-                            className="w-full px-5 py-4 h-32 rounded-2xl border-2 border-transparent focus:border-brand/20 bg-surface outline-none transition-all font-semibold text-text"
-                            value={draft.image_url}
-                            onChange={(e) => setDraft(prev => ({ ...prev, image_url: e.target.value }))}
-                          />
-                        </div>
+                      <label className="text-[11px] font-black uppercase tracking-widest text-text-muted ml-1">Product Photo</label>
+                      <div className="relative group/upload">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          id="image-upload"
+                          onChange={handleImageUpload}
+                          disabled={uploadingImage}
+                        />
+                        <label 
+                          htmlFor="image-upload"
+                          className="flex flex-col items-center justify-center gap-3 w-full h-32 rounded-2xl border-2 border-dashed border-border bg-surface-soft/50 hover:bg-surface-soft hover:border-brand transition-all cursor-pointer"
+                        >
+                          <Upload size={24} className={uploadingImage ? "animate-bounce text-brand" : "text-text-muted"} />
+                          <span className="text-xs font-bold text-text-muted">{uploadingImage ? "Uploading..." : draft.image_url ? "Click to replace photo" : "Click to upload photo"}</span>
+                        </label>
                       </div>
                     </div>
 

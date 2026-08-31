@@ -215,8 +215,30 @@ def _normalize_email(value: str | None) -> str:
 
 
 def _normalize_phone(value: str | None) -> str | None:
-    digits = "".join(ch for ch in (value or "") if ch.isdigit())
-    return digits or None
+    """Normalize a phone number for comparison/lookup.
+
+    Tries to canonicalize to the same +255XXXXXXXXX format that
+    validate_phone_format() stores at registration time, so an exact `==`
+    DB lookup at login works regardless of how the user types their phone
+    (0712345678, 255712345678, or +255712345678 should all match the same
+    stored account). Previously this just stripped to digits-only
+    (255700002001), which no longer matched the canonical +255-prefixed
+    format registration now stores -- phone login was silently broken for
+    every account type, while email login kept working, which is why it
+    went unnoticed. Falls back to a plain digit-only strip for anything
+    that doesn't match the Tanzanian pattern, preserving old fuzzy-matching
+    behavior for legacy/malformed data rather than failing outright.
+    """
+    raw = value or ""
+    digits_only = "".join(ch for ch in raw if ch.isdigit())
+    if not digits_only:
+        return None
+
+    match = re.fullmatch(r"(?:255|0)(\d{9})", digits_only)
+    if match:
+        return f"+255{match.group(1)}"
+
+    return digits_only
 
 
 def _phone_matches(stored: str | None, provided: str | None) -> bool:
@@ -561,7 +583,7 @@ def register(
         password_hash=hash_password(password),
         role="user",
         is_active=True,
-        is_verified=False,
+        is_verified=True,  # Email confirmation is not required to use the platform
         verification_token=verification_token,
         supabase_uid=supabase_uid,
     )
@@ -576,13 +598,13 @@ def register(
         recipient_id=recipient_id,
         recipient_email=recipient_email,
         title="Welcome to Soko-Link",
-        message="Please verify your email to complete registration.",
+        message="Your account is ready to go.",
         notification_type="system",
         severity="success",
-        action_href=f"/verify-email?token={verification_token}",
+        action_href="/app/customer",
         send_email=bool(recipient_email),
-        email_subject="Verify your Soko-Link account",
-        email_body=f"Hello {recipient_name},\n\nWelcome to Soko-Link. Please click the link below to verify your email:\n\n{verification_token}\n\nSoko-Link Team",
+        email_subject="Welcome to Soko-Link",
+        email_body=f"Hello {recipient_name},\n\nWelcome to Soko-Link. Your account is ready -- you can start browsing and ordering right away.\n\nSoko-Link Team",
         background_tasks=background_tasks,
     )
     db.commit()
@@ -647,7 +669,7 @@ def register_customer(
         password_hash=hash_password(password),
         role="user",
         is_active=True,
-        is_verified=False,
+        is_verified=True,  # Email confirmation is not required to use the platform
         verification_token=verification_token,
         supabase_uid=supabase_uid,
     )
@@ -757,9 +779,6 @@ def login(
 
     if not user or not verify_and_upgrade_password(password, user):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    if isinstance(user, User) and not user.is_verified:
-        raise HTTPException(status_code=401, detail="Please confirm your email before signing in")
 
     role = getattr(user, "role", None)
     if role is None:

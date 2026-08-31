@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../../features/auth/ThemeContext";
 import { Sidebar } from "../../components/Sidebar";
-import { VerifyEmailBanner } from "../../components/VerifyEmailBanner";
 import { env } from "../../config/env";
 import { 
   Bell, 
@@ -67,7 +66,6 @@ export function AppShell() {
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
       
       <main className="flex min-w-0 flex-1 flex-col">
-        <VerifyEmailBanner />
         <header className="sticky top-0 z-30 w-full px-4 py-4 md:px-8">
           <div className="mx-auto flex h-16 items-center justify-between rounded-2xl border border-border bg-surface/80 px-4 shadow-premium backdrop-blur-xl md:h-20 md:px-6">
             <div className="flex items-center gap-4">

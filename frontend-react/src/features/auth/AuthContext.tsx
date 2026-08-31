@@ -214,6 +214,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // would just produce a confusing, unrelated error, since that
       // account doesn't exist there. Stop here with a clear message.
       const message = String(supabaseError?.message || "").toLowerCase();
+      // NOTE: this only fires if Supabase auth is actually configured
+      // (VITE_SUPABASE_URL set) AND that Supabase project has "Confirm
+      // email" turned on in its own dashboard (Authentication > Providers
+      // > Email). That's a setting on Supabase's side, not something this
+      // codebase can disable -- the backend's own /auth/login (used when
+      // Supabase isn't configured, the default here) does not require
+      // email confirmation.
       if (message.includes("email not confirmed") || message.includes("email_not_confirmed")) {
         throw new Error(
           "Please check your email and click the confirmation link before signing in. " +

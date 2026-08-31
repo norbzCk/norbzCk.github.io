@@ -62,13 +62,24 @@ class TestBusinessRegister:
         stray_customer = db.query(User).filter(User.phone == "+255712345678").first()
         assert stray_customer is None
 
-    def test_register_with_logo_upload(self, client, db):
+    def test_register_with_logo_upload(self, client, db, monkeypatch):
+        # save_uploaded_image now uploads to Supabase Storage, which needs
+        # real SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY credentials and a
+        # network call -- neither belongs in this test. Mock the function
+        # itself so this test verifies OUR code (does register_business
+        # correctly wire a provided file through to shop_logo_url) rather
+        # than re-testing Supabase's own upload API.
+        async def fake_save_uploaded_image(file):
+            return "https://fake-supabase-url.test/storage/v1/object/public/product-images/logo.png"
+
+        monkeypatch.setattr("backend.app.business.save_uploaded_image", fake_save_uploaded_image)
+
         fake_png = b"\x89PNG\r\n\x1a\n" + b"0" * 100
         files = {"logo": ("logo.png", io.BytesIO(fake_png), "image/png")}
         data = {**VALID_PAYLOAD, "phone": "0712345679", "email": "logo@example.com"}
         response = client.post("/business/register", data=data, files=files)
         assert response.status_code == 200
-        assert response.json()["user"]["shop_logo_url"].startswith("/uploads/")
+        assert response.json()["user"]["shop_logo_url"] == "https://fake-supabase-url.test/storage/v1/object/public/product-images/logo.png"
 
     def test_register_rejects_non_image_logo(self, client, db):
         files = {"logo": ("not-an-image.txt", io.BytesIO(b"hello"), "text/plain")}
