@@ -38,8 +38,19 @@ export function getStoredUserType() {
 
 export function persistSession(token: string, user: SessionUser, userType: UserType = "") {
   const normalized = normalizeUser(user, userType);
-  // Access token and refresh token will now be handled by HTTP-only cookies from the backend.
-  // This function is now only responsible for persisting user data if needed for UI, not tokens.
+  // The backend also sets an httpOnly cookie as a defense-in-depth fallback,
+  // but that cookie is samesite=lax -- meaning browsers will NOT send it on
+  // cross-origin requests (e.g. localhost:5173 -> localhost:8000 are
+  // different origins purely because the ports differ, and in production
+  // the frontend/backend are typically on different subdomains entirely).
+  // The Bearer token in localStorage is what actually has to carry auth on
+  // every request; a prior change stopped storing it here on the assumption
+  // the cookie alone would work, which silently broke every authenticated
+  // request (create product, upload image, etc.) since neither mechanism
+  // was actually reaching the backend.
+  if (token) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  }
   localStorage.setItem(SESSION_USER_KEY, JSON.stringify(normalized || {}));
   if (userType) {
     localStorage.setItem(USER_TYPE_KEY, userType);
