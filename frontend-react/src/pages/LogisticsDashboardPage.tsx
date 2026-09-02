@@ -59,6 +59,7 @@ function resolveImageUrl(url?: string | null) {
   const raw = String(url || "").trim();
   if (!raw) return "";
   if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("data:")) return raw;
   if (raw.startsWith("/")) return `${env.apiBase}${raw}`;
   return `${env.apiBase}/${raw.replace(/^\/+/, "")}`;
 }

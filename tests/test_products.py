@@ -436,15 +436,7 @@ class TestProductCategories:
 
 
 class TestProductImageUpload:
-    def test_upload_product_image(self, client, db, seller_user, monkeypatch):
-        # save_uploaded_image now uploads to Supabase Storage -- mock it so
-        # this test verifies the endpoint's own auth/wiring rather than
-        # depending on real Supabase credentials and network access.
-        async def fake_save_uploaded_image(file):
-            return "https://fake-supabase-url.test/storage/v1/object/public/product-images/test.jpg"
-
-        monkeypatch.setattr("backend.app.products.save_uploaded_image", fake_save_uploaded_image)
-
+    def test_upload_product_image(self, client, db, seller_user):
         login = login_as(client, "seller@test.com", "TestPass1!")
         token = login.json()["access_token"]
 
@@ -455,7 +447,48 @@ class TestProductImageUpload:
         )
         assert response.status_code == 200
         data = response.json()
-        assert "image_url" in data
+        assert data["image_url"].startswith("data:image/jpeg;base64,")
+
+    def test_upload_oversized_image_rejected(self, client, db, seller_user):
+        """Regression test for the DB-storage size cap -- previously images
+        went to Supabase Storage (5MB cap there); storing directly in a DB
+        row needs a tighter cap so large uploads don't bloat every row."""
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        oversized = b"\x00" * (3 * 1024 * 1024)
+        response = client.post(
+            "/products/upload-image",
+            files={"file": ("big.png", oversized, "image/png")},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 400
+
+    def test_uploaded_image_round_trips_through_product_creation(self, client, db, seller_user):
+        """Regression test for the core bug this fixes: an uploaded image's
+        data URI must survive being stored on a product and read back
+        identically -- not silently mangled by URL-resolution logic that
+        only expected relative paths or http(s):// URLs."""
+        login = login_as(client, "seller@test.com", "TestPass1!")
+        token = login.json()["access_token"]
+
+        upload = client.post(
+            "/products/upload-image",
+            files={"file": ("test.png", b"\x89PNG\r\n\x1a\n" + b"0" * 50, "image/png")},
+            headers=auth_header(token),
+        )
+        image_url = upload.json()["image_url"]
+
+        created = client.post("/products/", json={
+            "name": "Product With Uploaded Image",
+            "category": "Test",
+            "price": 1000,
+            "stock": 5,
+            "description": "has a real uploaded image",
+            "image_url": image_url,
+        }, headers=auth_header(token))
+        assert created.status_code == 201
+        assert created.json()["product"]["image_url"] == image_url
 
     def test_upload_invalid_format(self, client, db, seller_user):
         login = login_as(client, "seller@test.com", "TestPass1!")

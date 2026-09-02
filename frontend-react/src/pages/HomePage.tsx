@@ -123,6 +123,7 @@ function resolveImageUrl(url?: string | null) {
   const raw = String(url || "").trim();
   if (!raw) return FALLBACK_IMAGE;
   if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("data:")) return raw;
   if (raw.startsWith("/")) return `${env.apiBase}${raw}`;
   return `${env.apiBase}/${raw.replace(/^\/+/, "")}`;
 }

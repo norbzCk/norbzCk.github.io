@@ -1,117 +1,56 @@
-"""Shared image-upload handling."""
+"""Shared image-upload handling.
 
+Stores images as base64 data URIs directly in the database column that
+references them (Product.image_url, BusinessUser.shop_logo_url,
+LogisticsUser.profile_photo) -- not in Supabase Storage, not on local
+disk. This is deliberate: it needs zero external service credentials and
+zero persistent disk, both of which were live problems on Render (local
+disk is ephemeral there, and Supabase Storage needs SUPABASE_URL/
+SUPABASE_SERVICE_ROLE_KEY configured and the bucket marked public, which
+wasn't happening -- uploads were failing outright with a 500).
+
+A data URI (`data:image/png;base64,....`) is valid anywhere a normal image
+URL is valid -- <img src="..."> renders it directly, no separate fetch or
+static file route required. The tradeoff is DB row size, which is why the
+size cap here is intentionally conservative (2MB raw, ~2.7MB once base64-
+encoded) -- fine for product photos, not meant for large uploads.
+"""
 from __future__ import annotations
 
+import base64
 import os
-import uuid
 
-import httpx
 from fastapi import HTTPException, UploadFile
 
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5MB
-
-SUPABASE_STORAGE_BUCKET = os.getenv(
-    "SUPABASE_STORAGE_BUCKET",
-    "product-images",
-)
+MAX_IMAGE_BYTES = 2 * 1024 * 1024  # 2MB raw (before base64 inflates it ~33%)
 
 
 async def save_uploaded_image(file: UploadFile) -> str:
-    """Validate and upload an image to Supabase Storage.
-
-    Returns the permanent public URL of the uploaded image.
+    """Validate an uploaded image and return it as a base64 data URI,
+    ready to store directly in a DB column and render directly in an
+    <img> tag with no further processing.
     """
-
     filename = file.filename or ""
     suffix = os.path.splitext(filename)[1].lower()
 
     if suffix not in ALLOWED_IMAGE_EXT:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported image format",
-        )
+        raise HTTPException(status_code=400, detail="Unsupported image format")
 
-    if not (file.content_type or "").startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="File must be an image",
-        )
+    content_type = (file.content_type or "").strip()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
 
     content = await file.read()
 
     if not content:
-        raise HTTPException(
-            status_code=400,
-            detail="Empty file",
-        )
+        raise HTTPException(status_code=400, detail="Empty file")
 
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(
             status_code=400,
-            detail="Image too large (max 5MB)",
+            detail=f"Image too large (max {MAX_IMAGE_BYTES // (1024 * 1024)}MB)",
         )
 
-    supabase_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-    service_role_key = os.getenv(
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "",
-    ).strip()
-
-    if not supabase_url or not service_role_key:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase image storage is not configured",
-        )
-
-    stored_filename = f"{uuid.uuid4().hex}{suffix}"
-    storage_path = f"products/{stored_filename}"
-
-    upload_url = (
-        f"{supabase_url}/storage/v1/object/"
-        f"{SUPABASE_STORAGE_BUCKET}/{storage_path}"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {service_role_key}",
-        "apikey": service_role_key,
-        "Content-Type": file.content_type or "application/octet-stream",
-        "Cache-Control": "3600",
-        "x-upsert": "false",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                upload_url,
-                content=content,
-                headers=headers,
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Could not connect to image storage",
-        ) from exc
-
-    if response.status_code >= 300:
-        try:
-            error_data = response.json()
-            detail = (
-                error_data.get("message")
-                or error_data.get("error")
-                or response.text
-            )
-        except Exception:
-            detail = response.text
-
-        raise HTTPException(
-            status_code=502,
-            detail=f"Supabase Storage upload failed: {detail[:300]}",
-        )
-
-    public_url = (
-        f"{supabase_url}/storage/v1/object/public/"
-        f"{SUPABASE_STORAGE_BUCKET}/{storage_path}"
-    )
-
-    return public_url
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"

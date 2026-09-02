@@ -507,4 +507,10 @@ class AssistantConversationMessage(Base):
     text = Column(Text, nullable=False)
     source = Column(String, nullable=True)
     model = Column(String, nullable=True)
+    # Used when role="pending_action": JSON-encoded {tool_name, tool_args,
+    # summary}. Set when the agent wants to run a high-stakes tool (create/
+    # update a product, change an order's status) and is waiting for the
+    # user to explicitly confirm before it actually executes.
+    pending_action_json = Column(Text, nullable=True)
+    resolved = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
